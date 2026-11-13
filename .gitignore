@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+frontend/node_modules/
+frontend/dist/
+backend/data/*.sqlite3
+backend/data/*.sqlite3-*
+
+# Local environment credentials
+.env
+.env.*
+!.env.example

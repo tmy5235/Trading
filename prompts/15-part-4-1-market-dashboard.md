@@ -1,0 +1,5 @@
+# Part 4.1 — Market Data and the Dashboard
+
+Build a working client-server dashboard with live-streaming Yahoo Finance market data and persistent records. Display updating candlesticks and corresponding volume, use WebSockets, and show source, age and feed status. Store observations in SQLite for retrieval and replay; preserve identity, source and receipt times, revisions and candle completion, and explain and test duplicate, revised and out-of-order events. Demonstrate live source to backend, chart and database, including an unavailable feed. Maintain startup, database initialization, agent instructions and design/schema documentation without exposing credentials. CSV is practice, not the live-streaming deliverable.
+
+Submit only `report.md` to Canvas with a summary, design and verification, limitations, supporting evidence, repository URL and identifying commit, and an accessible 30–60 second demonstration video. Source remains in the repository. The student will record the video and supplied the repository URL https://github.com/tmy5235/Trading.git.

@@ -1,0 +1,3 @@
+# AI-use disclosure
+
+OpenAI Codex, using the GPT-6 coding agent in the desktop environment, assisted with project code, documentation, test commands, browser verification and this submission draft. Saved task prompts are in `prompts/`; `docs/evidence-log.md` connects selected instructions to files, observations and limitations. The student should review the implementation and this disclosure and add any other agents, editors or models they used outside this recorded session. The application also contains an optional OpenAI decision feature; prior checks used `gpt-6-luna`, separately from the Yahoo market-data source. AI-generated claims should be checked against the recorded evidence. No credentials or complete private chat transcript are included.

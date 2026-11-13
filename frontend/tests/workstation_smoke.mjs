@@ -1,0 +1,51 @@
+import { chromium, expect } from '@playwright/test'
+
+const browser=await chromium.launch({channel:'chrome',headless:true,args:['--no-sandbox']})
+const page=await browser.newPage({baseURL:'http://127.0.0.1:18762'})
+const api=page.request
+const state=async()=> (await api.get('http://127.0.0.1:18761/__test/state')).json()
+const post=async path=>{const response=await api.post('http://127.0.0.1:18761'+path);if(!response.ok()) throw new Error(`${path}: ${response.status()}`);return response.json()}
+try {
+  await page.goto('http://127.0.0.1:18762/',{waitUntil:'domcontentloaded'})
+  await page.getByRole('group',{name:'Mode'}).getByRole('button',{name:'Replay'}).click()
+  await expect(page.getByLabel('Start UTC:')).not.toHaveValue('')
+  await page.getByRole('button',{name:'Start replay'}).click()
+  for(let i=0;i<6;i++) await page.getByRole('button',{name:'Next observation'}).click()
+  await page.getByLabel('Indicator name:').fill('Smoke SMA')
+  await page.getByRole('button',{name:'Add indicator'}).click()
+  await page.getByLabel('Smoke SMA window:').fill('3')
+  await page.getByRole('button',{name:'Update Smoke SMA'}).click()
+  await page.getByRole('group',{name:'Inspect candle'}).getByRole('button',{name:'2026-11-09 14:32:00 UTC'}).click()
+  await expect(page.getByText('Indicators: Smoke SMA: 10.00',{exact:false})).toBeVisible()
+  await page.getByRole('group',{name:'Inspect candle'}).getByRole('button',{name:'2026-11-09 14:34:00 UTC'}).click()
+  await page.getByRole('button',{name:'Ask about chart',exact:true}).click()
+  await expect(page.getByText('Visual comparison: matches',{exact:false})).toBeVisible()
+  await expect(page.getByText('Answer: wait',{exact:false})).toBeVisible()
+  expect((await state()).fills).toBe(0)
+  let calls=(await state()).calls
+  expect(calls.length).toBe(2); expect(calls[0][2]).toBe(calls[1][2])
+  await post('/__test/provider-failure')
+  await page.getByRole('button',{name:'Ask about chart',exact:true}).click()
+  await expect(page.getByText('Status provider_error',{exact:false})).toBeVisible()
+  expect((await state()).fills).toBe(0)
+  await page.getByRole('group',{name:'Mode'}).getByRole('button',{name:'Live'}).click()
+  await page.getByRole('button',{name:'Start paper automation'}).click()
+  await expect(page.getByText('Status: running',{exact:true})).toBeVisible()
+  for (const [stage,price] of [[1,100],[2,110],[3,105]]) {
+    await post('/__test/advance')
+    await expect.poll(async()=>{const s=await state();return s.events.at(-1)?.[1]},{timeout:15000}).toBe('pending')
+    await post(`/__test/fill/${price}`)
+    await expect.poll(async()=>(await state()).fills).toBe(stage)
+  }
+  await expect.poll(async()=>{const s=await state();return [s.cash,s.shares.AAPL,...s.pnl].map(String).join(',')}).toBe('1025,0,25,0,25')
+  await expect(page.getByText('Cash: $1025 | Shares: AAPL 0',{exact:false})).toBeVisible({timeout:10000})
+  const duplicate=await post('/__test/duplicate');expect(duplicate.duplicate).toBe(true);expect((await state()).fills).toBe(3)
+  await post('/__test/advance')
+  await expect.poll(async()=>{const s=await state();return s.events.at(-1)?.[1]},{timeout:15000}).toBe('skipped')
+  expect((await state()).fills).toBe(3)
+  await page.getByRole('button',{name:'Stop paper automation'}).click()
+  await expect(page.getByText('Status: stopped',{exact:true})).toBeVisible()
+  await post('/__test/advance')
+  expect((await state()).fills).toBe(3)
+  console.log('PASS: replay SMA 10; matching PNG; provider failure; buy/sell/close $1025, 0 shares, $25/$0 P&L; veto, duplicate and stop')
+} catch (error) { console.error('Synthetic dashboard:', await page.locator('body').innerText()); console.error('Synthetic fixture state:', JSON.stringify(await state())); throw error } finally { await browser.close() }
