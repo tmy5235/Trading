@@ -1,7 +1,7 @@
 # Assignment 4, Part 4.1 — Market Data and the Dashboard
 
 **Repository:** [Trading](https://github.com/tmy5235/Trading)  
-**Submitted source commit:** [`a66d90ac3d75515c0a9be26df5215d4e38db1a2e`](https://github.com/tmy5235/Trading/commit/a66d90ac3d75515c0a9be26df5215d4e38db1a2e).  
+**Submitted source commit:** [`1f22bbd90decea134533987433480d96527ee88d`](https://github.com/tmy5235/Trading/commit/1f22bbd90decea134533987433480d96527ee88d).  
 **30–60 second demonstration video:** TO BE ADDED by the student after recording and uploading; verify that the instructor can open the link.
 
 ## Completed work
