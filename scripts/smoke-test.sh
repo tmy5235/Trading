@@ -24,6 +24,6 @@ if [ "$answer" != y ]; then echo 'FAIL or unverified: live chart'; exit 1; fi
 kill -TERM "$feed_pid"
 wait "$feed_pid" 2>/dev/null || true
 feed_pid=
-printf 'After up to 8 seconds, with the page still open, does Feed show disconnected while Dashboard connection remains connected? Enter y for pass: '
+printf 'After up to 8 seconds, with the page still open, does Feed show disconnected while Dashboard remains connected? Enter y for pass: '
 read -r answer
 if [ "$answer" = y ]; then echo 'PASS: live chart and upstream disconnect'; else echo 'FAIL: upstream disconnect status'; exit 1; fi

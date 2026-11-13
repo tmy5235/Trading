@@ -347,8 +347,8 @@ createApp({
     onMounted(() => {
       chart = createChart(chartElement.value, { width: chartElement.value.clientWidth, height: 440, layout: { background: { color: '#111c2b' }, textColor: '#91a0b5', attributionLogo: true }, grid: { vertLines: { color: '#1c2a3b' }, horzLines: { color: '#1c2a3b' } }, rightPriceScale: { borderColor: '#2b3a4e' }, timeScale: { timeVisible: true, borderColor: '#2b3a4e' }, crosshair: { vertLine: { color: '#7186a3' }, horzLine: { color: '#7186a3' } } })
       prices = chart.addSeries(CandlestickSeries, { upColor: '#35d0a1', downColor: '#f2767c', borderVisible: false, wickUpColor: '#35d0a1', wickDownColor: '#f2767c' })
-      shortLine = chart.addSeries(LineSeries, { color: '#1769aa', lineWidth: 2, title: 'Short SMA' })
-      longLine = chart.addSeries(LineSeries, { color: '#b85a00', lineWidth: 2, title: 'Long SMA' })
+      shortLine = chart.addSeries(LineSeries, { color: '#70a7f5', lineWidth: 2, title: 'Short SMA' })
+      longLine = chart.addSeries(LineSeries, { color: '#e2ac62', lineWidth: 2, title: 'Long SMA' })
       markers = createSeriesMarkers(prices)
       volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: '' })
       prices.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.3 } })
@@ -369,6 +369,7 @@ createApp({
     onBeforeUnmount(() => { voice.stop(); disposed = true; stopReplay(); ++requestVersion; clearInterval(timer); clearInterval(paperTimer); clearInterval(automationTimer); clearTimeout(reconnectTimer); socket?.close(); resizeObserver?.disconnect(); chart?.remove() })
     return () => {
       const item = records.value.find(r => r.candle.timestamp === selected.value), c = item?.candle
+      const formatUtc = value => value ? value.replace('T', ' ').replace(/\.\d+(?:Z|\+00:00)$/, ' UTC').replace(/(?:Z|\+00:00)$/, ' UTC') : 'unavailable'
       const choices = (label, values, current, select, disabled = false) => h('div', { class: 'choice-control' }, [
         h('span', { class: 'control-label' }, label),
         h('div', { class: 'button-group', role: 'group', 'aria-label': label }, values.map(({ value, text }) =>
@@ -376,10 +377,15 @@ createApp({
       ])
       return h('main', { class: 'app-shell' }, [
         h('header', { class: 'app-header' }, [
-          h('div', { class: 'brand' }, [h('div', { class: 'brand-mark' }, '◈'), h('div', [h('strong', 'MARKET / STUDIO'), h('span', 'Personal trading workstation')])]),
-          h('div', { class: 'header-meta' }, [h('span', { class: 'header-status' }, '●  LOCAL WORKSPACE'), h('span', { class: 'simulation-badge' }, 'PAPER TRADING')])
+          h('div', { class: 'brand' }, [
+            h('div', { class: 'brand-mark', 'aria-hidden': 'true' }, [h('svg', {viewBox:'0 0 24 24', fill:'none'}, [
+              h('path', {d:'M5 16v-4m0 2H3m2 0h2M12 19V6m0 10H9V9h3m0 7h3V9h-3M19 12V4m0 5h-2V6h2m0 3h2V6h-2', stroke:'currentColor', 'stroke-width':'1.7', 'stroke-linecap':'round', 'stroke-linejoin':'round'})
+            ])]),
+            h('div', [h('strong', 'Market Studio'), h('span', 'Trading workspace')])
+          ]),
+          h('span', { class: 'simulation-badge' }, 'PAPER ACCOUNT')
         ]),
-        h('div', { class: 'page-heading' }, [h('div', [h('span', { class: 'eyebrow' }, 'MARKET OVERVIEW'), h('h1', 'Trading dashboard'), h('p', 'Your market data, in focus.')]), h('span', { class: 'market-pill' }, mode.value === 'live' ? '●  LIVE MONITOR' : '◷  REPLAY MODE')]),
+        h('div', { class: 'page-heading' }, [h('div', [h('span', { class: 'eyebrow' }, 'WORKSPACE'), h('h1', 'Market overview')])]),
         h('div', { class: 'dashboard-grid' }, [
           h('div', { class: 'main-column' }, [
             h('section', { class: 'market-panel' }, [
@@ -395,12 +401,19 @@ createApp({
           h('button', { disabled: decisionBusy.value || paperBusy.value || stepBusy.value || playing.value || position.value >= count.value, onClick: () => advance(generation) }, 'Next observation'),
           h('p', { role: 'status' }, `Replay: ${position.value}/${count.value} | Source time: ${event.value?.source_time_utc || 'none'} | Received: ${event.value?.received_at || 'none'} | Observation: ${event.value?.observation_id ?? 'none'}`),
         ]) : null,
-        h('p', {class:'market-identity'}, `Symbol: ${mode.value === 'replay' ? symbol.value : 'AAPL'} | Interval: ${timeframe.value} | Source: ${mode.value === 'replay' ? replaySource.value : 'Yahoo Finance'}`),
-        mode.value === 'live' ? h('p', {class:'latest-quote'}, `Latest Yahoo observation: ${latestPrice.value == null ? 'unavailable' : `$${latestPrice.value}`} | ${observationSession.value || 'session unknown'} | Received: ${receiptTime.value || 'unknown'}; chart uses regular-session candles.`) : null,
-        mode.value === 'live' ? h('p', { role: 'status', class: ['feed-line', feed.value === 'connected' ? 'is-connected' : 'is-disconnected'] }, `Feed: ${feed.value} | Dashboard connection: ${transport.value} | Latest source age: ${age.value} | Source time: ${sourceTime.value || 'unknown'} | Observation: ${observationId.value ?? 'none'}`) : null,
+        h('div', {class:'market-summary'}, [
+          h('div', [h('div', {class:'market-identity'}, mode.value === 'replay' ? symbol.value : 'AAPL'), h('p', {class:'market-source'}, mode.value === 'replay' ? replaySource.value : 'Yahoo Finance')]),
+          mode.value === 'live' ? h('div', {class:'quote-block'}, [h('span', {class:'quote-label'}, 'LATEST OBSERVATION'), h('strong', latestPrice.value == null ? 'Unavailable' : `$${Number(latestPrice.value).toFixed(2)}`), h('span', {class:'quote-session'}, observationSession.value || 'Session unknown')]) : h('div', {class:'quote-block'}, [h('span', {class:'quote-label'}, 'REPLAY'), h('strong', `${position.value} / ${count.value}`), h('span', {class:'quote-session'}, 'observations')])
+        ]),
+        mode.value === 'live' ? h('div', {role:'status', class:'feed-line'}, [
+          h('span', {class:['status-item', feed.value === 'connected' ? 'is-connected' : 'is-disconnected']}, [h('i', {'aria-hidden':'true'}), `Feed: ${feed.value}`]),
+          h('span', {class:['status-item', transport.value === 'connected' ? 'is-connected' : 'is-disconnected']}, [h('i', {'aria-hidden':'true'}), `Dashboard: ${transport.value}`]),
+          h('span', {class:'status-age'}, `Source age: ${age.value}`)
+        ]) : null,
+        mode.value === 'live' ? h('p', {class:'observation-detail'}, `Source ${formatUtc(sourceTime.value)} · Received ${formatUtc(receiptTime.value)} · Observation ${observationId.value ?? 'unavailable'}`) : null,
         choices('Timeframe', ['1m', '5m', '15m', '1h', '1d'].map(v => ({value:v,text:v})), timeframe.value, value => { timeframe.value = value; if (mode.value === 'live') loadLive(); else startReplay() }, decisionBusy.value || automation.value.state.enabled),
-        h('p', `Short SMA (${shortWindow.value}): blue | Long SMA (${longWindow.value}): orange; signals use ended, fully covered candles.`),
-        h('p', 'Regular session; times UTC. Volume is a snapshot-derived estimate and may be unknown.'),
+        h('div', {class:'chart-meta'}, [h('div', {class:'chart-legend'}, [h('span', [h('i', {class:'legend-short'}), `SMA ${shortWindow.value}`]), h('span', [h('i', {class:'legend-long'}), `SMA ${longWindow.value}`])]), h('span', 'Regular session · UTC')]),
+        h('p', {class:'chart-note'}, 'Volume is estimated from snapshots and may be unknown. Signals use complete candles.'),
         h('div', { ref: chartElement, class: 'chart-canvas' }), h('p', { role: 'status' }, error.value),
         choices('Inspect candle', records.value.map(r => ({value:r.candle.timestamp,text:r.candle.timestamp.replace('T',' ').replace('Z',' UTC')})), selected.value, value => { selected.value = value }),
         c ? h('p', `UTC ${c.timestamp} — Open ${c.open}, High ${c.high}, Low ${c.low}, Close ${c.close}, Volume ${c.volume ?? 'unknown'} shares — ${item.ended ? 'ended' : 'forming'}; coverage ${item.coverage.minutes_present}/${item.coverage.minutes_expected}`) : null,
@@ -424,7 +437,7 @@ createApp({
             ]),
         h('section', [
           h('h2', 'Ask about chart'),
-          h('p', 'Select a completed candle in Inspect candle. The model receives the frozen chart and paper-account snapshot; this does not place an order.'),
+          h('p', 'Analyze a selected completed candle and paper-account snapshot. No order is placed.'),
           h('button', {disabled:chartBusy.value || decisionBusy.value || stepBusy.value || paperBusy.value || playing.value || !selected.value, onClick:askAboutChart}, chartBusy.value ? 'Analyzing chart…' : 'Ask about chart'),
           h('p', {role:'alert'}, chartError.value),
           chartCapture.value ? h('div', [
@@ -463,8 +476,8 @@ createApp({
           ]),
           h('aside', { class: 'sidebar' }, [
         h('section', [
-          h('h2', 'Paper account (simulated)'),
-          h('p', `Market data: ${paper.value.data_label || 'Recorded market data'}`),
+          h('h2', 'Paper account'),
+          h('p', {class:'account-label'}, 'SIMULATED BALANCE'),
           h('p', `Cash: $${paper.value.cash} | Shares: ${paper.value.positions.map(p => `${p.symbol} ${p.shares}`).join(', ') || '0'}`),
           h('label', ['Shares: ', h('input', {type:'number', min:1, step:1, value:paperQty.value, onInput:e => {paperQty.value=e.target.value}})]),
           ...['buy','sell','close','hold','wait'].map(action => h('button', {disabled:paperBusy.value || stepBusy.value || playing.value, onClick:() => submitPaper(action)}, action[0].toUpperCase()+action.slice(1))),
@@ -482,7 +495,7 @@ createApp({
         h('section', [
           h('h2', 'Paper automation'),
           h('p', `Status: ${automation.value.state.enabled ? 'running' : 'stopped'}${automationWorking.value ? ' | analyzing a completed candle' : ''}`),
-          h('p', 'Paper strategy: buy on an upward SMA crossover while flat; close on a downward crossover while holding; otherwise wait or hold. Decisions expire 60 seconds after candle close.'),
+          h('p', 'Buys on an upward SMA crossover and closes on a downward crossover. Decisions expire after 60 seconds.'),
           h('button', {disabled: !!automation.value.state.enabled || mode.value !== 'live', onClick:startAutomation}, 'Start paper automation'),
           h('button', {disabled: !automation.value.state.enabled, onClick:stopAutomation}, 'Stop paper automation'),
           h('p', {role:'alert'},automationError.value),
