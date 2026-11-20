@@ -4,7 +4,7 @@ Trevor Michael Yuhaniak · IST 402
 
 **Repository:** [tmy5235/Trading](https://github.com/tmy5235/Trading)
 
-**Submitted application commit:** To be added after the current changes are reviewed, committed, and pushed.
+**Submitted application commit:** [`0343122975924378c4a49939c58d5c039f2b4b60`](https://github.com/tmy5235/Trading/commit/0343122975924378c4a49939c58d5c039f2b4b60)
 
 **Demonstration video:** Recorded; the accessible link will be provided in the Canvas submission comment.
 
@@ -30,12 +30,12 @@ The simulations are long-only and assume no fees, spread, slippage, or market im
 | Backtest and accounting | In a synthetic recorded fixture, an upward signal led to a later buy at $1 and a later close at $2, producing $1 realized profit and $10,001 final cash. A later revision outside the range did not change the run. |
 | Browser and paper ledger | The isolated backtest browser smoke test showed those two fills and $1 profit while confirming the separate paper ledger was unchanged. The workstation smoke test also passed a separate synthetic buy/sell/close example with $25 realized and $0 unrealized profit. |
 | Recorded data | A 200-receipt recorded AAPL sample produced seven completed-bar decisions and no trades, leaving $10,000 cash and $0 profit or loss. A later browser run also identified an upward signal that was skipped because its evidence was stale. |
-| Automated checks | The Python suite passed 52 tests, the Vite build passed, and the backtest and workstation browser smoke tests passed locally. The GitHub Actions workflow is configured to run the Python suite and browser checks on pushes; a run for the submitted commit remains to be verified. |
+| Automated checks | The Python suite passed 52 tests, the Vite build passed, and the backtest and workstation browser smoke tests passed locally. The [GitHub Actions run for the submitted application commit](https://github.com/tmy5235/Trading/actions/runs/44677472369) passed its Python suite, backtest browser smoke test, and workstation browser smoke test. |
 
-The detailed commands, expected results, observed results, and distinction between synthetic and recorded data are in the project [verification log](https://github.com/tmy5235/Trading/blob/main/docs/verification.md). One initial test used a cutoff that accidentally included a fill receipt; the cutoff was corrected and the test passed. The project [README](https://github.com/tmy5235/Trading/blob/main/README.md) describes setup, the backtest, and its assumptions.
+The detailed commands, expected results, observed results, and distinction between synthetic and recorded data are in the project [verification log](https://github.com/tmy5235/Trading/blob/0343122975924378c4a49939c58d5c039f2b4b60/docs/verification.md). One initial test used a cutoff that accidentally included a fill receipt; the cutoff was corrected and the test passed. The project [README](https://github.com/tmy5235/Trading/blob/0343122975924378c4a49939c58d5c039f2b4b60/README.md) describes setup, the backtest, and its assumptions.
 
 ## Limitations and AI use
 
-A clean checkout and the GitHub Actions run for the submitted commit have not yet been verified. The local market-recording database is not included in the repository, so a fresh checkout needs recorded observations to run a backtest on real data. The synthetic smoke tests provide a repeatable offline check.
+A clean local checkout of the application commit passed the Python tests, frontend build, and backtest browser smoke test using the existing Python environment and installed frontend dependencies. GitHub Actions also passed after installing the specified dependencies on its runner. The local market-recording database is not included in the repository, so a fresh checkout needs recorded observations to run a backtest on real data. The synthetic smoke tests provide a repeatable offline check.
 
-OpenAI Codex assisted with code, documentation, and verification. The [AI-use disclosure](https://github.com/tmy5235/Trading/blob/main/AI-USE.md), [saved prompts](https://github.com/tmy5235/Trading/tree/main/prompts), and [evidence log](https://github.com/tmy5235/Trading/blob/main/docs/evidence-log.md) describe the recorded development process.
+OpenAI Codex assisted with code, documentation, and verification. The [AI-use disclosure](https://github.com/tmy5235/Trading/blob/0343122975924378c4a49939c58d5c039f2b4b60/AI-USE.md), [saved prompts](https://github.com/tmy5235/Trading/tree/0343122975924378c4a49939c58d5c039f2b4b60/prompts), and [evidence log](https://github.com/tmy5235/Trading/blob/0343122975924378c4a49939c58d5c039f2b4b60/docs/evidence-log.md) describe the recorded development process.
