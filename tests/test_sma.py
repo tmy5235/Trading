@@ -36,6 +36,18 @@ class SMATests(unittest.TestCase):
         for pair in ((0,3), (3,3), (4,3), (-1,2), (1.5,3), (True,3)):
             with self.assertRaises(ValueError): validate_windows(*pair)
 
+    def test_reference_pandas_rolling_means(self):
+        # Independent pandas reference for both rolling windows, including warm-up.
+        import pandas as pd
+        entries = [{'candle': {'close': close}, 'ended': True, 'coverage': {'complete': True}} for close in CLOSES]
+        calculated = add_sma(entries, 2, 3)
+        series = pd.Series(CLOSES, dtype='float64')
+        for window, key in ((2, 'short'), (3, 'long')):
+            expected = series.rolling(window=window, min_periods=window).mean().tolist()
+            for actual, reference in zip(calculated, expected):
+                if pd.isna(reference): self.assertIsNone(actual['sma'][key])
+                else: self.assertAlmostEqual(actual['sma'][key], reference)
+
     def test_full_precision_before_display_rounding(self):
         entries = [{'candle': {'close': close}, 'ended': True, 'coverage': {'complete': True}} for close in (1, 1, 1.00000001, 0.99999998)]
         result = add_sma(entries, 1, 2)

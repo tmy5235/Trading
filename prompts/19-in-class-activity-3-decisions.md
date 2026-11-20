@@ -1,0 +1,7 @@
+# In-class Activity 3 — Working with the Decision API
+
+Use the Decision API control to send a chart snapshot to an OpenAI model and show its choice of long, short, or wait. The model should assess the image rather than receiving underlying candle data. The result may also appear as a chart marker. Show how the parts connect in an educational flowchart. This decision does not place a trade.
+
+Use the activity's example: inspect the last two completed visible candles, exclude forming candles, and choose wait for unclear, insufficient or stale evidence. Long means both close above their own open; short means both close below their own open; wait covers mixed or equal candles and insufficient evidence. Include image, symbol, interval, timestamps, staleness and chart limitations, but no separate OHLCV array. Validate the `chart_signal` answer by name. Match the selected choice's probability by value, preserve zero, show unavailable if absent, and distinguish errors and refusals from a returned wait. Do not interpret the probability as profit or proof that the model followed the rule. Preserve earlier choices with their images and probabilities. Keep credentials in the ignored backend environment. The pre-existing position-aware analyst/reviewer workflow is separate.
+
+Reference: https://developers.openai.com/api/docs/guides/decisions and https://developers.openai.com/api/reference/resources/decisions/methods/create

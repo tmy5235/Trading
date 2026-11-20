@@ -1,27 +1,41 @@
-# Assignment 4, Part 4.1 — Market Data and the Dashboard
+# Assignment 4, Part 4.2 — Indicators, Simulated Trading, and Backtesting
 
-**Repository:** [Trading](https://github.com/tmy5235/Trading)  
-**Submitted source commit:** [`1f22bbd90decea134533987433480d96527ee88d`](https://github.com/tmy5235/Trading/commit/1f22bbd90decea134533987433480d96527ee88d).  
-**30–60 second demonstration video:** TO BE ADDED by the student after recording and uploading; verify that the instructor can open the link.
+Trevor Michael Yuhaniak · IST 402
 
-## Completed work
+**Repository:** [tmy5235/Trading](https://github.com/tmy5235/Trading)
 
-The local Vue dashboard receives AAPL data from a Python/FastAPI backend. A yfinance WebSocket worker receives Yahoo Finance observations and stores decoded messages and receipt times in SQLite. FastAPI derives regular-session candlesticks and estimated volume, then sends chart data and status to the browser over a WebSocket. The dashboard displays the source, latest price and time, source age, and separate upstream and dashboard connection statuses. It labels outside-session quotes separately from regular-session chart candles. Saved observations can be replayed by receipt time without changing the market record.
+**Submitted application commit:** To be added after the current changes are reviewed, committed, and pushed.
 
-## Design and verification
+**Demonstration video:** Recorded; the accessible link will be provided in the Canvas submission comment.
 
-Exact duplicate messages share one canonical observation and retain separate receipts. Different messages at the same source time remain separate because the feed does not establish which is a correction. Replay follows receipt order; candle prices follow source time, so late arrivals can revise a derived candle. Completion and coverage accompany the candle and are recomputed, not stored as immutable candle rows. Volume is estimated from cumulative snapshots and may be unknown or incomplete.
+## Completed solution
 
-A live AAPL update on November 10 was followed from SQLite observation 6 at $348.06 to the forming 19:15 UTC candle. A saved interval replayed twice to the same $348.01 close and estimated 615-share volume, without changing the recorded counts. On November 13 at 03:20 UTC, a fresh Yahoo AAPL observation 27 at $356.26 appeared in SQLite and in the dashboard as an outside-session quote. Stopping the Yahoo worker changed the feed to disconnected while the dashboard connection remained connected. Constructed duplicate and changed messages produced two observations and three receipts, including after reopening the database. Targeted candle, replay, live-chart and timeframe tests and the frontend build passed. Details, commands, failure evidence and timestamps are in [verification](https://github.com/tmy5235/Trading/blob/main/docs/verification.md).
+Market Studio is a local Vue and FastAPI workstation that displays recorded and live AAPL market data. For Part 4.2, the chart shows two configurable simple moving averages (SMAs), calculated from completed candles, and can show confirmed crossover markers. The **Show SMAs / Hide SMAs** control changes the chart display without changing the calculations. The interface also shows source age and whether a candle is forming or ended.
 
-## Limitations
+The paper account tracks simulated orders and fills, cash, share positions, and realized and unrealized profit or loss. The SMA strategy buys a configured number of shares on an upward crossover when flat, closes the position on a downward crossover while holding, and otherwise waits or holds. The workstation also provides a separate historical backtest of this rule; its results do not change the paper account.
 
-The latest after-hours quote is live but does not update the regular-session chart; the observed live chart update was captured during an earlier regular session. Source timestamp units and volume semantics are inferred from observed fields rather than confirmed against a provider contract. Snapshot-derived volume is not necessarily the true minute total, and some values are unavailable. The feed does not provide a verified correction identity. The comprehensive offline workstation smoke test has not passed end to end. The SQLite market database is intentionally local and ignored by Git, so replay on a different machine requires capturing or supplying data.
+## Design and assumptions
 
-## Supporting materials
+The short SMA is the arithmetic mean of the most recent completed closes in its window; the long SMA uses a larger window. Both remain unavailable while warming up. Forming candles and candles without complete coverage do not enter the windows. Crossovers compare the unrounded values, with an equal reading retaining the prior side until a change of side is confirmed.
 
-- [README and startup instructions](https://github.com/tmy5235/Trading/blob/main/README.md)
-- [Data flow and SQLite schema](https://github.com/tmy5235/Trading/blob/main/docs/design-pipeline.md)
-- [Agent instructions](https://github.com/tmy5235/Trading/blob/main/AGENTS.md)
-- [Verification record](https://github.com/tmy5235/Trading/blob/main/docs/verification.md)
-- [Evidence log](https://github.com/tmy5235/Trading/blob/main/docs/evidence-log.md) and [AI-use disclosure](https://github.com/tmy5235/Trading/blob/main/AI-USE.md)
+The backtest walks recorded AAPL observations in receipt order under a frozen receipt cutoff. Each decision uses the evidence available at that replay step. A signal creates a pending simulated order that can fill only on a later eligible quote; an order without a later quote remains unfilled. The backtest starts flat with configurable cash and share size, rejects unaffordable buys, and marks any open position using the latest eligible quote. It excludes Yahoo history downloaded later because its retrieval time does not establish what was available at the historical decision time.
+
+The simulations are long-only and assume no fees, spread, slippage, or market impact. The paper account uses weighted-average purchase cost to calculate realized and unrealized results. The backtest runs in memory and is limited to 500 receipts per run. Missing observations, a single selected instrument, and parameter choices limit what the results establish; historical results do not predict future performance.
+
+## Verification
+
+| Check | Result |
+| --- | --- |
+| SMA and crossover | The SMA tests compared the rolling averages with pandas and hand-calculated values, checked crossovers and ties, and compared replay prefixes with batch calculations. Forming candles were excluded. |
+| Backtest and accounting | In a synthetic recorded fixture, an upward signal led to a later buy at $1 and a later close at $2, producing $1 realized profit and $10,001 final cash. A later revision outside the range did not change the run. |
+| Browser and paper ledger | The isolated backtest browser smoke test showed those two fills and $1 profit while confirming the separate paper ledger was unchanged. The workstation smoke test also passed a separate synthetic buy/sell/close example with $25 realized and $0 unrealized profit. |
+| Recorded data | A 200-receipt recorded AAPL sample produced seven completed-bar decisions and no trades, leaving $10,000 cash and $0 profit or loss. A later browser run also identified an upward signal that was skipped because its evidence was stale. |
+| Automated checks | The Python suite passed 52 tests, the Vite build passed, and the backtest and workstation browser smoke tests passed locally. The GitHub Actions workflow is configured to run the Python suite and browser checks on pushes; a run for the submitted commit remains to be verified. |
+
+The detailed commands, expected results, observed results, and distinction between synthetic and recorded data are in the project [verification log](https://github.com/tmy5235/Trading/blob/main/docs/verification.md). One initial test used a cutoff that accidentally included a fill receipt; the cutoff was corrected and the test passed. The project [README](https://github.com/tmy5235/Trading/blob/main/README.md) describes setup, the backtest, and its assumptions.
+
+## Limitations and AI use
+
+A clean checkout and the GitHub Actions run for the submitted commit have not yet been verified. The local market-recording database is not included in the repository, so a fresh checkout needs recorded observations to run a backtest on real data. The synthetic smoke tests provide a repeatable offline check.
+
+OpenAI Codex assisted with code, documentation, and verification. The [AI-use disclosure](https://github.com/tmy5235/Trading/blob/main/AI-USE.md), [saved prompts](https://github.com/tmy5235/Trading/tree/main/prompts), and [evidence log](https://github.com/tmy5235/Trading/blob/main/docs/evidence-log.md) describe the recorded development process.

@@ -1,0 +1,3 @@
+# Prepare the backend for OpenAI Agents SDK
+
+Prepare the existing Python backend environment for `openai-agents==0.24.0` and `openai==3.52.0`. Check the interpreter, environment, installed versions, pip consistency and compatibility. Reuse the environment. Before installing or changing dependency declarations, show the command, target and files affected and obtain the student's approval. Do not update or remove other packages to resolve conflicts without approval. After approval, install, pin the requested versions, check the requested imports and distribution versions, compare pip check before and after, and record results and restart needs.

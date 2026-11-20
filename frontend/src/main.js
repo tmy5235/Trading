@@ -2,18 +2,25 @@ import { createApp, h, onMounted, onBeforeUnmount, ref } from 'vue'
 import './style.css'
 import { drawFrozenCapture } from './chart_capture.js'
 import { useVoice } from './voice.js'
+import Watchlist from './watchlist.js'
+import Backtest from './backtest.js'
+import ChartChat, { assessmentQuestion, matchesCapture } from './chart_chat.js'
 import { CandlestickSeries, HistogramSeries, LineSeries, createChart, createSeriesMarkers } from 'lightweight-charts'
 
 createApp({
   setup() {
     const chartElement = ref(null), timeframe = ref('1m'), mode = ref('live')
-    const records = ref([]), selected = ref(''), feed = ref('unknown'), transport = ref('connecting')
+    const showSignals = ref(false), showSmas = ref(true), chatOpen = ref(false), automationOpen = ref(false)
+    const records = ref([]), selected = ref(''), hovered = ref(''), feed = ref('unknown'), transport = ref('connecting'), liveSource = ref('Yahoo Finance')
     const sourceTime = ref(null), observationId = ref(null), latestPrice = ref(null), observationSession = ref(null), receiptTime = ref(null), age = ref('unknown'), error = ref('')
     const options = ref([]), symbol = ref('AAPL'), start = ref(''), end = ref(''), replaySource = ref('recorded observations')
     const position = ref(0), count = ref(0), event = ref(null), playing = ref(false)
+    const advancedReplay = ref(false), snapshotTime = ref(null), snapshotBusy = ref(false), rangeOpen = ref(false)
     const paper = ref({cash: '0', positions: [], orders: [], pnl_history: []}), paperQty = ref('1'), paperMessage = ref(''), paperBusy = ref(false), stepBusy = ref(false)
     const replayCheckpoint = ref(null), decisionSnapshot = ref(null), decisionResult = ref(null), decisionError = ref(''), decisionBusy = ref(false)
     const chartCapture = ref(null), chartResult = ref(null), chartError = ref(''), chartBusy = ref(false)
+    const lessonResult = ref(null), lessonImage = ref(''), lessonError = ref(''), lessonBusy = ref(false), lessonHistory = ref([])
+    let lessonSelection = 0
     const automation = ref({state:{enabled:0},events:[]}), automationError = ref(''), automationWorking = ref(false)
     let automationSeen = new Set(), automationQueue = Promise.resolve(), automationTimer, automationInitialized = false, automationOwner = null
     const voice=useVoice()
@@ -25,10 +32,17 @@ createApp({
     let requestVersion = 0, generation = 0, cutoff = null, disposed = false
     const toTime = value => Date.parse(value) / 1000
     function renderRecords(items) {
+      if (!items.length) {
+        lessonResult.value = null; lessonImage.value = ''; lessonError.value = ''
+      }
+      const previousLength = records.value.length
+      const wasFollowingCandle = selected.value === records.value.at(-1)?.candle.timestamp
+      const view = chart.timeScale().getVisibleLogicalRange()
+      const follow = view && view.to >= previousLength - 2
       records.value = items
       const candles = items.map(item => item.candle)
       prices.setData(candles.map(c => ({ time: toTime(c.timestamp), open: c.open, high: c.high, low: c.low, close: c.close })))
-      volume.setData(candles.map(c => c.volume == null ? { time: toTime(c.timestamp) } : { time: toTime(c.timestamp), value: c.volume, color: c.close >= c.open ? '#26a69a80' : '#ef535080' }))
+      volume.setData(candles.map(c => c.volume == null ? { time: toTime(c.timestamp) } : { time: toTime(c.timestamp), value: c.volume, color: c.close >= c.open ? '#19c79a99' : '#f0647499' }))
       shortLine.setData(items.map(r => r.sma?.short == null ? { time: toTime(r.candle.timestamp) } : { time: toTime(r.candle.timestamp), value: r.sma.short }))
       longLine.setData(items.map(r => r.sma?.long == null ? { time: toTime(r.candle.timestamp) } : { time: toTime(r.candle.timestamp), value: r.sma.long }))
       for (const [index, instance] of instances.value.entries()) {
@@ -40,12 +54,16 @@ createApp({
         }
         series.setData(items.map(r => r.indicators?.[instance.id] == null ? { time: toTime(r.candle.timestamp) } : { time: toTime(r.candle.timestamp), value: r.indicators[instance.id] }))
       }
-      markers.setMarkers(items.filter(r => r.sma?.signal).map(r => ({ time: toTime(r.candle.timestamp), position: r.sma.signal === 'up' ? 'belowBar' : 'aboveBar', color: r.sma.signal === 'up' ? '#008000' : '#c00000', shape: r.sma.signal === 'up' ? 'arrowUp' : 'arrowDown', text: r.sma.signal === 'up' ? 'SMA up' : 'SMA down' })))
-      if (!candles.some(c => c.timestamp === selected.value)) selected.value = candles.at(-1)?.timestamp || ''
+      markers.setMarkers(items.filter(r => showSignals.value && r.sma?.signal).map(r => ({ time: toTime(r.candle.timestamp), position: r.sma.signal === 'up' ? 'belowBar' : 'aboveBar', color: r.sma.signal === 'up' ? '#008000' : '#c00000', shape: r.sma.signal === 'up' ? 'arrowUp' : 'arrowDown', text: r.sma.signal === 'up' ? 'SMA up' : 'SMA down' })))
+      if (wasFollowingCandle || !candles.some(c => c.timestamp === selected.value)) selected.value = candles.at(-1)?.timestamp || ''
+      if (previousLength && items.length > previousLength && follow && mode.value === 'live') {
+        if (items.length - previousLength > 20) chart.timeScale().setVisibleLogicalRange({from:Math.max(0,items.length-75),to:items.length+4})
+        else chart.timeScale().scrollToRealTime()
+      }
     }
     function applyLive(state) {
       if (mode.value !== 'live' || state.symbol !== 'AAPL' || state.timeframe !== timeframe.value) return
-      feed.value = state.feed_status; sourceTime.value = state.source_time; observationId.value = state.observation_id; latestPrice.value = state.latest_price; observationSession.value = state.observation_session; receiptTime.value = state.receipt_time
+      liveSource.value = state.source || 'Yahoo Finance'; feed.value = state.feed_status; sourceTime.value = state.source_time; observationId.value = state.observation_id; latestPrice.value = state.latest_price; observationSession.value = state.observation_session; receiptTime.value = state.receipt_time
       renderRecords(state.records); error.value = state.records.length ? '' : 'No regular-session candles recorded yet.'
       if (!automationInitialized) { automationSeen = new Set(state.records.filter(r => r.ended).map(r => r.candle.timestamp)); automationInitialized = true }
       enqueueCompletedCandles(state.records)
@@ -61,7 +79,7 @@ createApp({
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const state = await response.json()
         if (version !== requestVersion) return
-        applyLive(state); chart.timeScale().fitContent()
+        applyLive(state); if (state.records.length) chart.timeScale().setVisibleLogicalRange({from:Math.max(0,state.records.length - 75), to:state.records.length + 4})
         const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
         socket = new WebSocket(`${scheme}//${location.host}/api/live?symbol=AAPL&timeframe=${encodeURIComponent(timeframe.value)}&short=${shortWindow.value}&long=${longWindow.value}`)
         socket.onopen = () => { transport.value = 'connected' }
@@ -83,7 +101,7 @@ createApp({
         return
       }
       windowError.value = ''; shortWindow.value = a; longWindow.value = b
-      if (mode.value === 'live') loadLive(); else startReplay()
+      if (mode.value === 'live') loadLive(); else if (advancedReplay.value) startReplay(); else loadSnapshot()
     }
     function chooseIndicatorType(value) {
       newType.value = value
@@ -117,7 +135,8 @@ createApp({
         indicatorError.value = ''; newName.value = ''
         await loadIndicatorConfig()
         if (mode.value === 'live') await loadLive()
-        else if (count.value) await requestReplay(position.value, generation)
+        else if (advancedReplay.value && count.value) await requestReplay(position.value, generation)
+        else if (!advancedReplay.value) await loadSnapshot()
       } catch (err) { indicatorError.value = err.message }
     }
     async function updateIndicator(instance) {
@@ -127,7 +146,7 @@ createApp({
         const response=await fetch(`/api/indicators/${instance.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:{window:Number(raw)}})})
         const data=await response.json(); if (!response.ok) throw new Error(data.detail || 'Unable to update indicator')
         indicatorError.value=''; await loadIndicatorConfig()
-        if (mode.value==='live') await loadLive(); else if(count.value) await requestReplay(position.value,generation)
+        if (mode.value==='live') await loadLive(); else if(advancedReplay.value && count.value) await requestReplay(position.value,generation); else if(!advancedReplay.value) await loadSnapshot()
       } catch (err) { indicatorError.value=err.message }
     }
     async function loadPaper() {
@@ -205,6 +224,65 @@ createApp({
       } catch (err) { chartError.value=err.message }
       finally { chartBusy.value=false }
     }
+    async function loadLessonHistory() {
+      const response = await fetch('/api/classroom-decisions')
+      if (!response.ok) throw new Error('Could not load chart interpretations')
+      lessonHistory.value = await response.json()
+    }
+    function visibleChart() {
+      if (!chart || !records.value.length) return null
+      const range = chart.timeScale().getVisibleRange()
+      if (!range) return null
+      const visible = records.value.filter(r => toTime(r.candle.timestamp) >= range.from && toTime(r.candle.timestamp) <= range.to)
+      if (!visible.length) return null
+      const completed = visible.filter(r => r.ended)
+      const forming = visible.filter(r => !r.ended)
+      const context = {symbol:mode.value === 'replay' ? symbol.value : 'AAPL', interval:timeframe.value, mode:mode.value,
+        source_time:mode.value === 'replay' ? (event.value?.source_time_utc || null) : sourceTime.value,
+        replay_receipt_time:mode.value === 'replay' ? (snapshotTime.value || event.value?.received_at || null) : null,
+        last_completed_candle:completed.at(-1)?.candle.timestamp || null, forming_candle:forming.at(-1)?.candle.timestamp || null,
+        feed_status:mode.value === 'replay' ? 'disconnected' : (['connected','disconnected'].includes(feed.value) ? feed.value : 'unknown')}
+      const key = JSON.stringify([generation, requestVersion, lessonSelection, context, position.value,
+        chart.timeScale().getVisibleLogicalRange(), chartElement.value.clientWidth, chartElement.value.clientHeight,
+        shortWindow.value, longWindow.value, instances.value, showSignals.value,
+        visible.map(r => [r.candle, r.ended, r.sma, r.indicators])])
+      return {context, key}
+    }
+    async function requestChartAgent(question, history = [], conversationId = null) {
+      if (lessonBusy.value) throw new Error('A chart request is already in progress.')
+      lessonBusy.value = true
+      try {
+        const view = visibleChart()
+        const snapshot = view ? {image_url:chart.takeScreenshot().toDataURL('image/png'),
+          context:{...view.context, capture_time:new Date().toISOString()}} : null
+        const response = await fetch('/api/chart-agent', {method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({question, snapshot, history, conversation_id:conversationId})})
+        const reply = await response.json()
+        if (!response.ok) throw new Error(typeof reply.detail === 'string' ? reply.detail : 'Chart agent request failed.')
+        const result = reply.tools?.find(call => call.name === 'assess_visible_chart')?.result
+        if (result?.id) {
+          const sameCapture = await matchesCapture(result, snapshot)
+          reply.stale = !sameCapture || disposed || visibleChart()?.key !== view?.key
+          if (!reply.stale) {
+            lessonResult.value = result
+            lessonImage.value = result.image_url
+            lessonError.value = ''
+          }
+          if (!disposed) await loadLessonHistory().catch(() => {})
+        }
+        return reply
+      }
+      finally { lessonBusy.value = false }
+    }
+    async function askClassroomChart() {
+      lessonError.value = ''
+      try {
+        const reply = await requestChartAgent(assessmentQuestion)
+        if (reply.stale) lessonError.value = 'The chart changed. The earlier capture is in recent interpretations.'
+        else if (!reply.tools?.some(call => call.name === 'assess_visible_chart' && call.result.id))
+          lessonError.value = reply.detail || reply.message || 'No chart assessment was returned.'
+      } catch (error) { lessonError.value = error.message }
+    }
     async function automationCall(path, payload) {
       const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload || {})})
       const data = await response.json()
@@ -235,6 +313,7 @@ createApp({
       const setting=automation.value.state
       if (!setting.enabled || setting.session_id !== automationOwner || mode.value !== 'live' || setting.symbol !== 'AAPL' || setting.timeframe !== timeframe.value) return
       for (const item of items) {
+        if (item.data_source === 'Yahoo history') continue
         const stamp=item.candle.timestamp
         if (!item.ended || automationSeen.has(stamp)) continue
         automationSeen.add(stamp)
@@ -274,8 +353,8 @@ createApp({
     }
     function stopReplay() { playing.value = false; clearTimeout(playTimer); generation++ }
     function invalidateReplay() {
-      stopReplay(); cutoff = null; position.value = 0; count.value = 0; event.value = null; replayCheckpoint.value = null
-      selected.value = ''; renderRecords([]); error.value = 'Choose a range and start replay.'
+      stopReplay(); replayScope = null; cutoff = null; position.value = 0; count.value = 0; event.value = null; replayCheckpoint.value = null; snapshotTime.value = null; snapshotBusy.value = false
+      hovered.value = ''; selected.value = ''; renderRecords([]); error.value = 'Choose a range and load the snapshot.'
     }
     function setSymbol(value) {
       symbol.value = value
@@ -297,6 +376,25 @@ createApp({
       error.value = result.count ? '' : 'This selection has no recorded observations.'
 
       if (result.position > 0) chart.timeScale().fitContent()
+    }
+    async function loadSnapshot() {
+      stopReplay(); const current = generation
+      replayScope = null; cutoff = null; position.value = 0; count.value = 0; event.value = null
+      replayCheckpoint.value = null; snapshotTime.value = null; hovered.value = ''; selected.value = ''; renderRecords([])
+      if (!start.value || !end.value) { error.value = 'Choose a recorded time range.'; return }
+      snapshotBusy.value = true; error.value = ''
+      try {
+        const params = new URLSearchParams({symbol:symbol.value, start:start.value, end:end.value, timeframe:timeframe.value, short:String(shortWindow.value), long:String(longWindow.value)})
+        const response = await fetch(`/api/chart-snapshot?${params}`)
+        const result = await response.json()
+        if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`)
+        if (current !== generation || mode.value !== 'replay' || advancedReplay.value) return
+        event.value = result.event; snapshotTime.value = result.as_of; replaySource.value = result.source
+        renderRecords(result.records)
+        error.value = result.records.length ? '' : 'No recorded candles are available for this time range.'
+        if (result.records.length) chart.timeScale().setVisibleLogicalRange({from:Math.max(0,result.records.length-75),to:result.records.length+4})
+      } catch (err) { if (current === generation) error.value = `Snapshot failed: ${err.message}` }
+      finally { if (current === generation) snapshotBusy.value = false }
     }
     async function startReplay() {
       stopReplay(); const current = generation
@@ -331,33 +429,38 @@ createApp({
         const items = await response.json(); options.value = items
         if (items.length && !start.value) setSymbol(items[0].symbol)
         if (mode.value === 'replay' && !items.length) error.value = 'No recorded observations are available.'
-        else if (mode.value === 'replay' && !count.value) error.value = 'Choose a range and start replay.'
+        else if (mode.value === 'replay' && !count.value && advancedReplay.value) error.value = 'Choose a range and start replay.'
       } catch (err) { if (mode.value === 'replay') error.value = `Could not load recordings: ${err.message}` }
     }
-    function changeMode(value) {
+    async function changeMode(value) {
       stopReplay(); replayScope = null; mode.value = value
       if (value === 'replay') {
         ++requestVersion; clearTimeout(reconnectTimer)
         if (socket) { socket.onclose = null; socket.close(); socket = null }
         feed.value = 'disconnected'; transport.value = 'disconnected'; selected.value = ''; renderRecords([])
-        error.value = options.value.length ? 'Choose a range and start replay.' : 'Loading recordings…'
-        loadOptions()
+        advancedReplay.value = false; rangeOpen.value = false; snapshotTime.value = null; hovered.value = ''
+        error.value = 'Loading recorded chart…'
+        await loadOptions()
+        if (mode.value === 'replay' && options.value.length) { setSymbol(symbol.value); await loadSnapshot() }
       } else loadLive()
     }
     onMounted(() => {
-      chart = createChart(chartElement.value, { width: chartElement.value.clientWidth, height: 440, layout: { background: { color: '#111c2b' }, textColor: '#91a0b5', attributionLogo: true }, grid: { vertLines: { color: '#1c2a3b' }, horzLines: { color: '#1c2a3b' } }, rightPriceScale: { borderColor: '#2b3a4e' }, timeScale: { timeVisible: true, borderColor: '#2b3a4e' }, crosshair: { vertLine: { color: '#7186a3' }, horzLine: { color: '#7186a3' } } })
-      prices = chart.addSeries(CandlestickSeries, { upColor: '#35d0a1', downColor: '#f2767c', borderVisible: false, wickUpColor: '#35d0a1', wickDownColor: '#f2767c' })
+      chart = createChart(chartElement.value, { width: chartElement.value.clientWidth, height: chartElement.value.clientHeight, layout: { background: { color: '#111c2b' }, textColor: '#91a0b5', attributionLogo: true }, grid: { vertLines: { color: '#1c2a3b' }, horzLines: { color: '#1c2a3b' } }, rightPriceScale: { borderColor: '#2b3a4e' }, timeScale: { timeVisible: true, borderColor: '#2b3a4e' }, crosshair: { vertLine: { color: '#7186a3' }, horzLine: { color: '#7186a3' } } })
+      prices = chart.addSeries(CandlestickSeries, { upColor: '#27d0a2', downColor: '#f06b7a', borderVisible: false, wickUpColor: '#27d0a2', wickDownColor: '#f06b7a', priceLineColor:'#70a9da' })
       shortLine = chart.addSeries(LineSeries, { color: '#70a7f5', lineWidth: 2, title: 'Short SMA' })
       longLine = chart.addSeries(LineSeries, { color: '#e2ac62', lineWidth: 2, title: 'Long SMA' })
       markers = createSeriesMarkers(prices)
       volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: '' })
       prices.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.3 } })
       volume.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } })
-      // Candle selection is explicit so pointer movement cannot change a capture cutoff.
-      resizeObserver = new ResizeObserver(() => chart.applyOptions({ width: chartElement.value.clientWidth }))
+      // Hover only inspects; a click explicitly selects a capture cutoff.
+      chart.subscribeCrosshairMove(param => { hovered.value = typeof param.time === 'number' ? new Date(param.time * 1000).toISOString().replace('.000Z','Z') : '' })
+      chart.subscribeClick(param => { const stamp = typeof param.time === 'number' ? new Date(param.time * 1000).toISOString().replace('.000Z','Z') : ''; if (records.value.some(r => r.candle.timestamp === stamp)) selected.value = stamp })
+      resizeObserver = new ResizeObserver(() => chart.applyOptions({ width: chartElement.value.clientWidth, height: chartElement.value.clientHeight }))
       resizeObserver.observe(chartElement.value)
       timer = setInterval(() => { age.value = sourceTime.value ? `${Math.max(0, Math.floor((Date.now() - Date.parse(sourceTime.value)) / 1000))} seconds` : 'unknown' }, 1000)
       loadOptions()
+      loadLessonHistory().catch(() => {})
       voice.refresh().catch(err=>{voice.status.value=err.message})
       loadIndicatorConfig().catch(err => { indicatorError.value = err.message })
       refreshAutomation().catch(err => { automationError.value=err.message })
@@ -368,7 +471,7 @@ createApp({
     })
     onBeforeUnmount(() => { voice.stop(); disposed = true; stopReplay(); ++requestVersion; clearInterval(timer); clearInterval(paperTimer); clearInterval(automationTimer); clearTimeout(reconnectTimer); socket?.close(); resizeObserver?.disconnect(); chart?.remove() })
     return () => {
-      const item = records.value.find(r => r.candle.timestamp === selected.value), c = item?.candle
+      const item = records.value.find(r => r.candle.timestamp === (hovered.value || selected.value)) || records.value.find(r => r.candle.timestamp === selected.value), c = item?.candle
       const formatUtc = value => value ? value.replace('T', ' ').replace(/\.\d+(?:Z|\+00:00)$/, ' UTC').replace(/(?:Z|\+00:00)$/, ' UTC') : 'unavailable'
       const choices = (label, values, current, select, disabled = false) => h('div', { class: 'choice-control' }, [
         h('span', { class: 'control-label' }, label),
@@ -383,27 +486,34 @@ createApp({
             ])]),
             h('div', [h('strong', 'Market Studio'), h('span', 'Trading workspace')])
           ]),
-          h('span', { class: 'simulation-badge' }, 'PAPER ACCOUNT')
+          h('div', {class:'header-actions'}, [h('a', {href:'#chart-chat', onClick:()=>{chatOpen.value=true}}, 'Chart chat'), h('span', { class: 'simulation-badge' }, 'PAPER ACCOUNT')])
         ]),
         h('div', { class: 'page-heading' }, [h('div', [h('span', { class: 'eyebrow' }, 'WORKSPACE'), h('h1', 'Market overview')])]),
         h('div', { class: 'dashboard-grid' }, [
           h('div', { class: 'main-column' }, [
             h('section', { class: 'market-panel' }, [
-        choices('Mode', [{value:'live',text:'Live'}, {value:'replay',text:'Replay'}], mode.value, changeMode, decisionBusy.value || automation.value.state.enabled),
-        mode.value === 'replay' ? h('section', [
-          h('h2', 'Replay'), h('p', 'Select a recorded receipt-time range in UTC; start is inclusive and end is exclusive.'),
-          choices('Symbol', options.value.map(item => ({value:item.symbol,text:item.symbol})), symbol.value, value => { setSymbol(value); invalidateReplay() }),
-          h('label', [' Start UTC: ', h('input', { value: start.value, onInput: e => { start.value = e.target.value; invalidateReplay() } })]),
-          h('label', [' End UTC: ', h('input', { value: end.value, onInput: e => { end.value = e.target.value; invalidateReplay() } })]),
-          h('button', { disabled: decisionBusy.value || stepBusy.value || paperBusy.value, onClick: startReplay }, 'Start replay'),
-          h('button', { disabled: decisionBusy.value || paperBusy.value || stepBusy.value || playing.value || position.value >= count.value, onClick: () => { playing.value = true; advance(generation) } }, 'Play'),
-          h('button', { disabled: !playing.value, onClick: stopReplay }, 'Pause'),
-          h('button', { disabled: decisionBusy.value || paperBusy.value || stepBusy.value || playing.value || position.value >= count.value, onClick: () => advance(generation) }, 'Next observation'),
-          h('p', { role: 'status' }, `Replay: ${position.value}/${count.value} | Source time: ${event.value?.source_time_utc || 'none'} | Received: ${event.value?.received_at || 'none'} | Observation: ${event.value?.observation_id ?? 'none'}`),
+        choices('Mode', [{value:'live',text:'Live'}, {value:'replay',text:'Snapshot'}], mode.value, changeMode, decisionBusy.value || automation.value.state.enabled),
+        mode.value === 'replay' ? h('section', {class:'snapshot-panel'}, [
+          h('h2', advancedReplay.value ? 'Step through observations' : 'Saved chart snapshot'),
+          h('p', advancedReplay.value ? 'Replay observations in receipt order.' : (snapshotTime.value ? `Snapshot as of ${formatUtc(snapshotTime.value)} · ${records.value.length} candles · ${timeframe.value}` : (snapshotBusy.value ? 'Loading saved chart…' : 'Choose a range to view saved candles.'))),
+          !advancedReplay.value ? h('button', {onClick:()=>{rangeOpen.value=!rangeOpen.value}}, rangeOpen.value ? 'Hide time range' : 'Change time range') : null,
+          (advancedReplay.value || rangeOpen.value) ? h('div', {class:'snapshot-range'}, [
+            choices('Symbol', options.value.map(item => ({value:item.symbol,text:item.symbol})), symbol.value, value => { setSymbol(value); invalidateReplay() }),
+            h('label', [' Start UTC: ', h('input', { value: start.value, onInput: e => { start.value = e.target.value; invalidateReplay() } })]),
+            h('label', [' End UTC: ', h('input', { value: end.value, onInput: e => { end.value = e.target.value; invalidateReplay() } })]),
+          ]) : null,
+          advancedReplay.value ? h('div', [
+            h('button', { disabled: decisionBusy.value || stepBusy.value || paperBusy.value, onClick: startReplay }, 'Start replay'),
+            h('button', { disabled: decisionBusy.value || paperBusy.value || stepBusy.value || playing.value || position.value >= count.value, onClick: () => { playing.value = true; advance(generation) } }, 'Play'),
+            h('button', { disabled: !playing.value, onClick: stopReplay }, 'Pause'),
+            h('button', { disabled: decisionBusy.value || paperBusy.value || stepBusy.value || playing.value || position.value >= count.value, onClick: () => advance(generation) }, 'Next observation'),
+            h('p', { role: 'status' }, `Replay: ${position.value}/${count.value} | Source time: ${event.value?.source_time_utc || 'none'} | Received: ${event.value?.received_at || 'none'} | Observation: ${event.value?.observation_id ?? 'none'}`),
+          ]) : (rangeOpen.value ? h('button', {disabled:snapshotBusy.value, onClick:loadSnapshot}, snapshotBusy.value ? 'Loading…' : 'Load snapshot') : null),
+          h('button', {disabled:snapshotBusy.value || playing.value || stepBusy.value, onClick:()=>{advancedReplay.value=!advancedReplay.value; rangeOpen.value=advancedReplay.value; if (advancedReplay.value) startReplay(); else loadSnapshot()}}, advancedReplay.value ? 'Back to snapshot' : 'Step through observations'),
         ]) : null,
         h('div', {class:'market-summary'}, [
-          h('div', [h('div', {class:'market-identity'}, mode.value === 'replay' ? symbol.value : 'AAPL'), h('p', {class:'market-source'}, mode.value === 'replay' ? replaySource.value : 'Yahoo Finance')]),
-          mode.value === 'live' ? h('div', {class:'quote-block'}, [h('span', {class:'quote-label'}, 'LATEST OBSERVATION'), h('strong', latestPrice.value == null ? 'Unavailable' : `$${Number(latestPrice.value).toFixed(2)}`), h('span', {class:'quote-session'}, observationSession.value || 'Session unknown')]) : h('div', {class:'quote-block'}, [h('span', {class:'quote-label'}, 'REPLAY'), h('strong', `${position.value} / ${count.value}`), h('span', {class:'quote-session'}, 'observations')])
+          h('div', [h('div', {class:'market-identity'}, mode.value === 'replay' ? symbol.value : 'AAPL'), h('p', {class:'market-source'}, mode.value === 'replay' ? replaySource.value : liveSource.value)]),
+          mode.value === 'live' ? h('div', {class:'quote-block'}, [h('span', {class:'quote-label'}, 'LATEST OBSERVATION'), h('strong', latestPrice.value == null ? 'Unavailable' : `$${Number(latestPrice.value).toFixed(2)}`), h('span', {class:'quote-session'}, observationSession.value || 'Session unknown')]) : h('div', {class:'quote-block'}, [h('span', {class:'quote-label'}, advancedReplay.value ? 'REPLAY' : 'SNAPSHOT'), h('strong', advancedReplay.value ? `${position.value} / ${count.value}` : `${records.value.length}`), h('span', {class:'quote-session'}, advancedReplay.value ? 'observations' : 'candles')])
         ]),
         mode.value === 'live' ? h('div', {role:'status', class:'feed-line'}, [
           h('span', {class:['status-item', feed.value === 'connected' ? 'is-connected' : 'is-disconnected']}, [h('i', {'aria-hidden':'true'}), `Feed: ${feed.value}`]),
@@ -411,21 +521,23 @@ createApp({
           h('span', {class:'status-age'}, `Source age: ${age.value}`)
         ]) : null,
         mode.value === 'live' ? h('p', {class:'observation-detail'}, `Source ${formatUtc(sourceTime.value)} · Received ${formatUtc(receiptTime.value)} · Observation ${observationId.value ?? 'unavailable'}`) : null,
-        choices('Timeframe', ['1m', '5m', '15m', '1h', '1d'].map(v => ({value:v,text:v})), timeframe.value, value => { timeframe.value = value; if (mode.value === 'live') loadLive(); else startReplay() }, decisionBusy.value || automation.value.state.enabled),
-        h('div', {class:'chart-meta'}, [h('div', {class:'chart-legend'}, [h('span', [h('i', {class:'legend-short'}), `SMA ${shortWindow.value}`]), h('span', [h('i', {class:'legend-long'}), `SMA ${longWindow.value}`])]), h('span', 'Regular session · UTC')]),
-        h('p', {class:'chart-note'}, 'Volume is estimated from snapshots and may be unknown. Signals use complete candles.'),
-        h('div', { ref: chartElement, class: 'chart-canvas' }), h('p', { role: 'status' }, error.value),
-        choices('Inspect candle', records.value.map(r => ({value:r.candle.timestamp,text:r.candle.timestamp.replace('T',' ').replace('Z',' UTC')})), selected.value, value => { selected.value = value }),
-        c ? h('p', `UTC ${c.timestamp} — Open ${c.open}, High ${c.high}, Low ${c.low}, Close ${c.close}, Volume ${c.volume ?? 'unknown'} shares — ${item.ended ? 'ended' : 'forming'}; coverage ${item.coverage.minutes_present}/${item.coverage.minutes_expected}`) : null,
+        choices('Timeframe', ['1m', '5m', '15m', '1h', '1d'].map(v => ({value:v,text:v})), timeframe.value, value => { timeframe.value = value; if (mode.value === 'live') loadLive(); else if (advancedReplay.value) startReplay(); else loadSnapshot() }, decisionBusy.value || automation.value.state.enabled),
+        h('div', {class:'chart-meta'}, [h('div', {class:['chart-legend', {'is-hidden':!showSmas.value}]}, [h('span', [h('i', {class:'legend-short'}), `SMA ${shortWindow.value}`]), h('span', [h('i', {class:'legend-long'}), `SMA ${longWindow.value}`])]), h('div', {class:'chart-actions'}, [h('button', {'aria-pressed':showSmas.value, 'aria-label':'Show SMA lines', onClick:()=>{showSmas.value=!showSmas.value;shortLine.applyOptions({visible:showSmas.value});longLine.applyOptions({visible:showSmas.value})}}, showSmas.value ? 'Hide SMAs' : 'Show SMAs'), h('button', {'aria-pressed':showSignals.value,onClick:()=>{showSignals.value=!showSignals.value;renderRecords(records.value)}}, showSignals.value ? 'Hide signals' : 'Show signals'), h('button', {onClick:()=>chart.timeScale().scrollToRealTime()}, 'Go to latest')])]),
+        h('div', {class:'quote-strip'}, c ? [h('span', {class:'quote-time'}, hovered.value ? 'CROSSHAIR' : 'SELECTED'), h('span', ['O ', h('b', Number(c.open).toFixed(2))]), h('span', ['H ', h('b', Number(c.high).toFixed(2))]), h('span', ['L ', h('b', Number(c.low).toFixed(2))]), h('span', ['C ', h('b', Number(c.close).toFixed(2))]), h('span', ['VOL ', h('b', c.volume == null ? '—' : Number(c.volume).toLocaleString())])] : [h('span','Waiting for candles')]),
+        h('p', {class:'chart-note'}, 'Regular session · UTC. Yahoo history when available; current bars from the stream. Volume may be estimated or unavailable.'),
+        h('div', { key:'candlestick-chart', ref: chartElement, class: 'chart-canvas' }), h('p', { role: 'status' }, error.value),
+        h('details', {class:'inline-details'}, [h('summary', 'Inspect recent candles'), choices('Inspect candle', records.value.filter((r,i) => i >= records.value.length - 8 || r.candle.timestamp === selected.value).map(r => ({value:r.candle.timestamp,text:r.candle.timestamp.replace('T',' ').replace('Z',' UTC')})), selected.value, value => { selected.value = value })]),
+        h('p', {class:'chart-note'}, 'Hover to inspect or click a candle to select it.'),
+        c ? h('p', `UTC ${c.timestamp} — Open ${Number(c.open).toFixed(2)}, High ${Number(c.high).toFixed(2)}, Low ${Number(c.low).toFixed(2)}, Close ${Number(c.close).toFixed(2)}, Volume ${c.volume == null ? 'unknown' : Number(c.volume).toLocaleString()} shares — ${item.ended ? 'ended' : 'forming'}; coverage ${item.coverage.minutes_present}/${item.coverage.minutes_expected}${item.data_source ? `; ${item.data_source}` : ''}`) : null,
         item ? h('p', `Short SMA: ${item.sma?.short == null ? 'unavailable' : item.sma.short.toFixed(2)} | Long SMA: ${item.sma?.long == null ? 'unavailable' : item.sma.long.toFixed(2)} | Crossover: ${item.sma?.signal || 'none'}`) : null,
         item && instances.value.length ? h('p', `Indicators: ${instances.value.map(i => `${i.name}: ${item.indicators?.[i.id] == null ? 'unavailable' : item.indicators[i.id].toFixed(2)}`).join(' | ')}`) : null,
-        h('div', {class:'sma-controls'}, [
+        h('details', {class:'inline-details'}, [h('summary', 'SMA settings'), h('div', {class:'sma-controls'}, [
           h('label', ['Short SMA window: ', h('input', { type: 'number', min: 1, step: 1, value: shortInput.value, onInput: e => { shortInput.value = e.target.value } })]),
           h('label', [' Long SMA window: ', h('input', { type: 'number', min: 1, step: 1, value: longInput.value, onInput: e => { longInput.value = e.target.value } })]),
           h('button', { disabled: automation.value.state.enabled, onClick: applyWindows }, 'Apply averages'),
           h('span', { role: 'alert' }, windowError.value),
-        ]),
-        h('section', {class:'indicator-panel'}, [
+        ])]),
+        h('details', {class:'inline-details'}, [h('summary', 'Additional chart indicators'), h('section', {class:'indicator-panel'}, [
           h('h2', 'Chart indicators'),
           choices('Indicator type', indicatorTypes.value.map(type => ({value:type.type,text:type.label})), newType.value, chooseIndicatorType),
           h('label', [' Indicator name: ', h('input', { value: newName.value, onInput: e => { newName.value = e.target.value } })]),
@@ -433,12 +545,31 @@ createApp({
           h('button', { onClick: createIndicator }, 'Add indicator'), h('span', { role: 'alert' }, indicatorError.value),
           h('p', `Configured: ${instances.value.map(i => `${i.name} (${i.type}, window ${i.settings.window})`).join(', ') || 'none'}`),
           ...instances.value.map(i=>h('div',[h('label',[`${i.name} window: `,h('input',{type:'number',min:1,step:1,value:editWindows.value[i.id] ?? String(i.settings.window),onInput:e=>{editWindows.value={...editWindows.value,[i.id]:e.target.value}}})]),h('button',{onClick:()=>updateIndicator(i)},`Update ${i.name}`)])),
-        ]),
+        ])]),
             ]),
-        h('section', [
+        h('details', {class:'tool-disclosure'}, [h('summary', 'SMA backtest'), h(Backtest)]),
+        h('details', {class:'tool-disclosure'}, [h('summary', 'Watchlist review'), h(Watchlist)]),
+        h('details', {class:'tool-disclosure'}, [h('summary', 'Chart signal'), h('section', {class:'lesson-panel'}, [
+          h('div', {class:'lesson-heading'}, [h('div', [h('span', {class:'eyebrow'}, 'IMAGE-ONLY EXERCISE'), h('h2', 'Chart signal')]), h('span', {class:'simulation-badge'}, 'NO TRADE')]),
+          h('p', 'The agent requests a fresh long, short, or wait assessment. OpenAI receives the chart image and timing context.'),
+          h('button', {class:'lesson-action', disabled:lessonBusy.value || playing.value || stepBusy.value || !records.value.length, onClick:askClassroomChart}, lessonBusy.value ? 'Analyzing chart…' : 'Analyze visible chart'),
+          h('p', {role:'alert'}, lessonError.value),
+          lessonImage.value ? h('div', {class:'lesson-capture'}, [h('h3','Captured chart'), h('img', {src:lessonImage.value, alt:'Chart image sent for analysis'})]) : null,
+          lessonResult.value ? h('div', {class:'lesson-result', role:'status'}, [
+            h('span', {class:'eyebrow'}, 'MODEL RESPONSE'),
+            lessonResult.value.status === 'ok' ? h('p', {class:'lesson-choice'}, `${lessonResult.value.answer.choice.toUpperCase()} (probability: ${lessonResult.value.answer.probability == null ? 'unavailable' : lessonResult.value.answer.probability.toFixed(2)})`) : h('p', {class:'lesson-choice'}, `Analysis ${lessonResult.value.status.replaceAll('_', ' ')}`),
+            h('p', lessonResult.value.status === 'missing_key' ? 'Configure OPENAI_API_KEY in the local backend environment.' : lessonResult.value.status === 'ok' ? 'This is the probability of the selected option, not the probability of trading profit. A valid label does not prove the model followed the rules.' : 'No choice was returned. Try again when the provider is available.'),
+            lessonResult.value.answer ? h('p', `Options: ${['long','short','wait'].map(v => `${v.toUpperCase()} ${lessonResult.value.answer.probabilities[v] == null ? 'unavailable' : lessonResult.value.answer.probabilities[v].toFixed(2)}`).join(' · ')}`) : null,
+            h('p', `${lessonResult.value.context.symbol} · ${lessonResult.value.context.interval} · ${lessonResult.value.context.mode} · ${lessonResult.value.context.data_source || 'source unavailable'} · ${lessonResult.value.context.is_stale ? 'stale' : 'not marked stale'} · Chart time ${formatUtc(lessonResult.value.context.last_completed_candle || lessonResult.value.context.forming_candle)} · Captured ${lessonResult.value.context.capture_time}`),
+          ]) : null,
+          h('div', {class:'lesson-flow', 'aria-label':'Decision flow'}, [h('span','Visible chart'),h('span','Vue capture'),h('span','FastAPI'),h('span','OpenAI choice'),h('span','Result')]),
+          h('p', {class:'chart-note'}, 'The model inspects the last two completed visible candles. Long: both close above open. Short: both close below open. Wait: mixed, equal, unclear, insufficient, or stale.'),
+          lessonHistory.value.length ? h('div', {class:'lesson-history'}, [h('h3','Recent chart interpretations'), ...lessonHistory.value.map(x => h('button', {onClick:() => { lessonSelection++; lessonResult.value=x; lessonImage.value=x.image_url; lessonError.value='' }}, `${x.answer?.choice?.toUpperCase() || x.status.replaceAll('_',' ')} · ${x.context.symbol} ${x.context.interval} · ${x.created_at}`))]) : null,
+        ])]),
+        h('details', {class:'tool-disclosure'}, [h('summary', 'Account-aware chart analysis'), h('section', [
           h('h2', 'Ask about chart'),
-          h('p', 'Analyze a selected completed candle and paper-account snapshot. No order is placed.'),
-          h('button', {disabled:chartBusy.value || decisionBusy.value || stepBusy.value || paperBusy.value || playing.value || !selected.value, onClick:askAboutChart}, chartBusy.value ? 'Analyzing chart…' : 'Ask about chart'),
+          h('p', mode.value === 'replay' && !advancedReplay.value ? 'Use Chart signal to analyze this snapshot. Account-aware analysis is available in step-by-step replay.' : 'Analyze a selected completed candle and paper-account snapshot. No order is placed.'),
+          h('button', {disabled:chartBusy.value || decisionBusy.value || stepBusy.value || paperBusy.value || playing.value || !selected.value || (mode.value === 'replay' && !replayCheckpoint.value), onClick:askAboutChart}, chartBusy.value ? 'Analyzing chart…' : 'Ask about chart'),
           h('p', {role:'alert'}, chartError.value),
           chartCapture.value ? h('div', [
             h('p', `Captured ${chartCapture.value.capture.symbol} | ${chartCapture.value.capture.timeframe} | Range ${chartCapture.value.capture.range_start} through ${chartCapture.value.capture.cutoff} | Snapshot ${chartCapture.value.capture.snapshot_id}`),
@@ -452,8 +583,8 @@ createApp({
             h('p', `Final backend check: ${chartResult.value.review.final_check.status} — ${chartResult.value.review.final_check.explanation}`),
             h('p', `Recorded evidence: ${chartResult.value.explanation}`),
           ]) : null,
-        ]),
-        mode.value === 'replay' ? h('section', [
+        ])]),
+        mode.value === 'replay' && advancedReplay.value ? h('section', [
           h('h2', 'Replay decision'),
           h('p', 'Select a completed candle, pause replay, then freeze the visible chart and paper account before requesting a model proposal.'),
           h('button', {disabled: !replayCheckpoint.value || !selected.value || playing.value || stepBusy.value || paperBusy.value || decisionBusy.value, onClick: freezeReplayDecision}, 'Freeze replay snapshot'),
@@ -471,17 +602,19 @@ createApp({
           ]) : null,
           h('p', {role:'alert'}, decisionError.value),
         ]) : null,
-        h('p', `Crossovers: ${records.value.filter(r => r.sma?.signal).map(r => `${r.candle.timestamp} ${r.sma.signal}`).join(', ') || 'none'}`),
+        h('p', `Crossovers: ${records.value.filter(r => r.sma?.signal).slice(-5).map(r => `${r.candle.timestamp} ${r.sma.signal}`).join(', ') || 'none'} (latest five)`),
         h('p', {class:'attribution'}, ['TradingView Lightweight Charts™ — Copyright © 2025 TradingView, Inc. ', h('a', { href: 'https://www.tradingview.com/', target: '_blank', rel: 'noopener noreferrer' }, 'TradingView')]),
           ]),
           h('aside', { class: 'sidebar' }, [
-        h('section', [
+        h('details', {id:'chart-chat', class:'tool-disclosure', open:chatOpen.value, onToggle:e=>{chatOpen.value=e.target.open}}, [h('summary', 'Chart chat'), h(ChartChat, {busy:lessonBusy.value, request:requestChartAgent})]),
+        h('section', {class:'paper-panel'}, [
           h('h2', 'Paper account'),
           h('p', {class:'account-label'}, 'SIMULATED BALANCE'),
           h('p', `Cash: $${paper.value.cash} | Shares: ${paper.value.positions.map(p => `${p.symbol} ${p.shares}`).join(', ') || '0'}`),
+          h('details', {class:'inline-details account-details'}, [h('summary', 'Trading controls and history'),
           h('label', ['Shares: ', h('input', {type:'number', min:1, step:1, value:paperQty.value, onInput:e => {paperQty.value=e.target.value}})]),
-          ...['buy','sell','close','hold','wait'].map(action => h('button', {disabled:paperBusy.value || stepBusy.value || playing.value, onClick:() => submitPaper(action)}, action[0].toUpperCase()+action.slice(1))),
-          h('button', {disabled:paperBusy.value || stepBusy.value || !lastPaperRequest || playing.value, onClick:() => submitPaper(null, true)}, 'Retry last request'),
+          ...['buy','sell','close','hold','wait'].map(action => h('button', {disabled:paperBusy.value || stepBusy.value || playing.value || (mode.value === 'replay' && !replayScope), onClick:() => submitPaper(action)}, action[0].toUpperCase()+action.slice(1))),
+          h('button', {disabled:paperBusy.value || stepBusy.value || !lastPaperRequest || playing.value || (mode.value === 'replay' && !replayScope), onClick:() => submitPaper(null, true)}, 'Retry last request'),
           h('p', {role:'status'}, paperMessage.value),
           ...paper.value.positions.filter(p => p.shares > 0 && !p.valuation).map(p => h('p', `${p.symbol} valuation: unavailable`)),
           h('h3', 'Profit and loss history'),
@@ -491,8 +624,9 @@ createApp({
           ]),
           h('h3', 'Paper order history'),
           h('ul', paper.value.orders.map(o => h('li', `Order ${o.id}: ${o.side} ${o.quantity ?? '?'} ${o.symbol} — ${o.status}${o.reason ? ` (${o.reason})` : ''}${o.fill_price !== null ? ` at $${o.fill_price} (observation ${o.observation_id}, receipt ${o.receipt_id}, executed ${o.executed_at})` : ''}; submitted ${o.submitted_at}`))),
+          ]),
         ]),
-        h('section', [
+        h('details', {class:'tool-disclosure', open:!!automation.value.state.enabled || automationOpen.value, onToggle:e=>{automationOpen.value=e.target.open}}, [h('summary', `Paper automation · ${automation.value.state.enabled ? 'running' : 'stopped'}`), h('section', [
           h('h2', 'Paper automation'),
           h('p', `Status: ${automation.value.state.enabled ? 'running' : 'stopped'}${automationWorking.value ? ' | analyzing a completed candle' : ''}`),
           h('p', 'Buys on an upward SMA crossover and closes on a downward crossover. Decisions expire after 60 seconds.'),
@@ -501,8 +635,8 @@ createApp({
           h('p', {role:'alert'},automationError.value),
           h('h3','Automation decisions'),
           h('ul', automation.value.events.map(e => h('li', `Candle ${e.candle_timestamp} | ${e.symbol} ${e.timeframe} | Crossover ${e.crossover || 'none'} | Decision ${e.decision_id || 'none'} | Proposal ${e.proposal || 'none'} | Review ${e.reviewer_verdict || 'none'} | ${e.status}${e.reason ? `: ${e.reason}` : ''} | Order ${e.order_id || 'none'} | Fill ${e.fill_id || 'none'}${e.price ? ` at $${e.price}` : ''}${e.cash != null ? ` | Cash $${e.cash} | Shares ${e.shares}` : ''}`))),
-        ]),
-        h('section', [
+        ])]),
+        h('details', {class:'tool-disclosure'}, [h('summary', 'Voice conversation'), h('section', [
           h('h2','Discuss a recorded decision by voice'),
           h('p','The selected record and your speech are sent to OpenAI for this conversation. The voice session cannot place orders.'),
           h('button',{disabled:voice.busy.value || voice.active.value,onClick:()=>voice.refresh().catch(err=>{voice.status.value=err.message})},'Refresh decisions'),
@@ -512,7 +646,7 @@ createApp({
           h('button',{disabled:!voice.busy.value && !voice.active.value,onClick:()=>voice.stop()},'End voice'),
           h('p',{role:'status'},`${voice.status.value} | Microphone: ${voice.active.value ? 'active' : 'off'}`),
           voice.audioAvailable.value ? h('button',{onClick:voice.play},'Play voice audio') : null,
-        ]),
+        ])]),
           ])
         ])
       ])

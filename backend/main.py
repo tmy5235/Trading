@@ -6,6 +6,8 @@ from typing import Literal
 
 import exchange_calendars as xcals
 from fastapi import FastAPI, HTTPException, Query, WebSocket
+from backend.classroom_decisions import ClassroomRequest
+from backend.chart_agent import ChartAgentRequest, run_chart_agent
 from backend.indicators import add_instances, add_sma, types_metadata, validate_windows
 from backend.indicator_store import create_instance, list_instances, update_instance
 from pydantic import BaseModel
@@ -161,6 +163,18 @@ def replay_options():
     return options()
 
 
+@app.get('/api/chart-snapshot')
+def saved_chart_snapshot(symbol: str, start: str, end: str,
+                         timeframe: Literal['1m', '5m', '15m', '1h', '1d'] = '1m',
+                         short: int = Query(2, gt=0), long: int = Query(3, gt=0)):
+    from backend.replay import chart_snapshot
+    try:
+        validate_windows(short, long)
+        return chart_snapshot(symbol, start, end, timeframe, short=short, long=long)
+    except (ValueError, OverflowError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @app.get('/api/replay')
 def replay_history(symbol: str, start: str, end: str,
                    timeframe: Literal['1m', '5m', '15m', '1h', '1d'] = '1m',
@@ -232,6 +246,38 @@ class SnapshotRequest(BaseModel):
     replay_position: int | None = None
     replay_cutoff: int | None = None
     replay_checkpoint_id: str | None = None
+
+
+@app.post('/api/chart-agent')
+async def chart_agent_request(request: ChartAgentRequest):
+    return await run_chart_agent(request)
+
+
+@app.post('/api/classroom-decisions')
+def classroom_decision(request: ClassroomRequest):
+    from backend.classroom_decisions import decide
+    try:
+        return decide(request.image_url, request.context.model_dump())
+    except (ValueError, OverflowError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get('/api/classroom-decisions')
+def classroom_decision_history():
+    from backend.classroom_decisions import history
+    return history()
+
+
+@app.get('/api/classroom-decisions/{decision_id}/chart.png')
+def classroom_image(decision_id: str):
+    from fastapi.responses import Response
+    from backend.classroom_decisions import init
+    with closing(connect()) as db:
+        init(db)
+        row = db.execute('SELECT png FROM classroom_chart_decisions WHERE id=?', (decision_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail='Chart capture not found')
+        return Response(content=row[0], media_type='image/png', headers={'Cache-Control':'no-store'})
 
 
 class DecisionRequest(BaseModel):
@@ -405,3 +451,56 @@ def voice_session(request: VoiceSessionRequest):
     try: return create_session(request.decision_id, request.sdp)
     except ValueError as error: raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error: raise HTTPException(status_code=502, detail=str(error)) from error
+
+# Read-only synthetic watchlist coordination.
+from backend import watchlist
+
+@app.get('/api/watchlist/evidence')
+def watchlist_evidence():
+    rows, captures = watchlist.capture_cycle(0)
+    return {'rows': rows, 'images': {key: value['image_url'] for key, value in captures.items()}}
+
+@app.post('/api/watchlist/start')
+async def start_watchlist(settings: watchlist.Settings, once: bool = True):
+    try: return watchlist.start(settings, once)
+    except ValueError as error: raise HTTPException(status_code=409, detail=str(error)) from error
+
+@app.get('/api/watchlist/{session_id}')
+def get_watchlist(session_id: str):
+    session = watchlist.sessions.get(session_id)
+    if not session: raise HTTPException(status_code=404, detail='Session not found')
+    return session.view()
+
+@app.post('/api/watchlist/{session_id}/stop')
+async def stop_watchlist(session_id: str):
+    session = watchlist.sessions.get(session_id)
+    if not session: raise HTTPException(status_code=404, detail='Session not found')
+    session.stopped = True
+    session.stop_event.set()
+    session.log(len(session.cycles), 'stop requested', 'Stop requested; in-flight work may finish')
+    return session.view()
+
+class BacktestRequest(BaseModel):
+    start: str
+    end: str
+    short: int = 2
+    long: int = 3
+    initial_cash: str = '10000'
+    quantity: int = 1
+
+@app.post('/api/backtest')
+def run_backtest(request: BacktestRequest):
+    from backend.backtest import run
+    try: return run(**request.model_dump())
+    except (ValueError, OverflowError) as error: raise HTTPException(status_code=422, detail=str(error)) from error
+
+@app.get('/api/backtest/range')
+def backtest_range():
+    from backend.replay import read_only
+    from backend.observations import DEFAULT_DB
+    if not DEFAULT_DB.exists(): return {'start': None, 'end': None}
+    with closing(read_only(DEFAULT_DB)) as db:
+        rows = db.execute('SELECT r.received_at_utc FROM receipts r JOIN observations o ON o.id=r.observation_id WHERE o.ticker=? ORDER BY r.id DESC LIMIT 200', ('AAPL',)).fetchall()
+    if not rows: return {'start': None, 'end': None}
+    stamps = [parse_utc(row[0]) for row in rows]
+    return {'start': min(stamps).isoformat(), 'end': (max(stamps) + timedelta(microseconds=1)).isoformat()}

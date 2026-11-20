@@ -8,6 +8,7 @@ import yfinance as yf
 from backend.observations import DEFAULT_DB, connect, record
 from backend.paper import initialize as init_paper, drain_live, apply_receipt
 from backend.pnl import mark_due_live
+from backend.market_history import refresh as refresh_history
 
 
 def now_utc():
@@ -30,6 +31,15 @@ async def run(symbol, database):
     init_paper(db)
     drain_live(db)
     client = None
+    async def history_loop():
+        while True:
+            try:
+                count, error = await asyncio.to_thread(refresh_history, symbol, database)
+                print(f'Yahoo history: {count} new or revised completed bars' if not error else f'Yahoo history unavailable: {error}', flush=True)
+            except Exception as error:
+                print(f'Yahoo history unavailable: {type(error).__name__}', flush=True)
+            await asyncio.sleep(60)
+    history_task = asyncio.create_task(history_loop())
     try:
         while True:
             set_status(db, symbol, 'connecting')
@@ -81,6 +91,8 @@ async def run(symbol, database):
                 await client.close()
             await asyncio.sleep(3)
     finally:
+        history_task.cancel()
+        await asyncio.gather(history_task, return_exceptions=True)
         set_status(db, symbol, 'disconnected')
         db.close()
 

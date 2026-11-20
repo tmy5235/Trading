@@ -21,5 +21,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
         working-directory: frontend
+      - name: Run Python verification suite
+        run: python -m unittest discover -s tests
+      - name: Run backtest browser smoke
+        run: sh scripts/smoke-backtest.sh
       - name: Run offline workstation smoke test
         run: sh scripts/smoke-workstation.sh

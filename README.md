@@ -18,6 +18,35 @@ python3 -m pip install -r backend/requirements.txt
 cd frontend && npm ci
 ```
 
+### OpenAI SDKs
+
+The backend uses the Python interpreter that launches `scripts.run_backend`. On this Mac it is the shared Python 3.14.7 framework installation. The approved SDK installation used:
+
+```sh
+/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m pip install --no-cache-dir 'openai-agents==0.24.0' 'openai==3.52.0' 'websockets==16.1.1'
+```
+
+The Agents SDK requires `websockets>=15,<17`. Version 16.1.1 worked with the project's Yahoo receiver. To verify the installed SDKs with the backend interpreter, run these checks from the project root:
+
+```sh
+python3 - <<'PY'
+from importlib.metadata import version
+from openai import AsyncOpenAI
+from agents import Agent, Runner, function_tool
+
+for package, expected in (("openai", "3.52.0"), ("openai-agents", "0.24.0")):
+    installed = version(package)
+    print(package, installed)
+    assert installed == expected
+print("Verified imports:", AsyncOpenAI.__name__, Agent.__name__, Runner.__name__, function_tool.__name__)
+PY
+python3 -m pip --no-cache-dir check
+```
+
+Both version assertions and all four imports passed on this Mac. Pip reported `No broken requirements found.` before and after installation. Restart any FastAPI and Yahoo worker processes started before the install so they load the updated WebSocket library.
+
+### Start the workstation
+
 In separate terminals, start the backend from the project root and the frontend from `frontend/`:
 
 ```sh
@@ -34,7 +63,7 @@ In a third terminal, start the AAPL receiver from the project root:
 SSL_CERT_FILE="$(python3 -m certifi)" python3 -m backend.live_feed --symbol AAPL
 ```
 
-Open `http://127.0.0.1:5173/`. Choose a timeframe and select a candle to inspect its UTC prices, volume, coverage, and forming status. The dashboard distinguishes the Yahoo feed status from the FastAPI WebSocket connection and shows the latest source age and observation. Stop each service with **Ctrl+C** in its terminal. The worker uses the default observation database described below. Only recorded regular-session AAPL data appears in the chart; an outside-session quote is labeled separately and does not create a regular-session candle. The chart can be empty until a regular-session observation is received.
+Open `http://127.0.0.1:5173/`. Choose a timeframe and select a candle to inspect its UTC prices, volume, coverage, and forming status. The dashboard distinguishes the Yahoo feed status from the FastAPI WebSocket connection and shows the latest source age and observation. Stop each service with **Ctrl+C** in its terminal. The worker uses the default observation database described below. The chart combines completed regular-session Yahoo one-minute history with recorded live observations; an outside-session quote is labeled separately and does not create a regular-session candle. The chart can be empty until a regular-session observation is received.
 
 For an interactive live smoke test from the project root, run `sh scripts/smoke-test.sh`. It starts the three services, opens a browser, asks for a chart and stored-observation comparison, and checks upstream disconnect status. It needs an available live AAPL update, and its revised end-to-end run remains unverified; manual live checks are recorded in `docs/verification.md`.
 
@@ -92,6 +121,11 @@ Recomputing incorporates late observations into their source minute and can also
 
 ## Live chart data
 
+The continuous worker refreshes Yahoo's recent one-minute history approximately once a minute, in addition to the WebSocket feed. Completed historical bars are saved separately in `yahoo_minute_bars` with their retrieval times and changed revisions; they are not fabricated observation receipts. After a completed historical bar becomes available it takes precedence over a partial observation-derived bar for that minute. The still-forming minute uses only received live observations. Historical volume is supplied by Yahoo and may be delayed or revised; observation-derived volume is an estimate and can be unknown. The display identifies each selected bar's source, and larger intervals combine the same minute data. If history is unavailable, the chart falls back to recorded streaming observations. The display retains red and green candlesticks, recent-minute volume, crosshair inspection, an optional crossover overlay and a Go to latest control.
+
+History has its own availability time: it cannot be treated as if it was received at an earlier candle close. Historical bars are not included in replay, paper fills, or the account-aware decision snapshots, which continue to use received observations and their original availability. Thus a selected historical backfill candle may not be available to the older position-aware **Ask about chart** workflow; the image-only **Chart signal** can analyze the visible chart. All quotes and bars may be delayed or revised, and this is a paper-trading classroom application, not a brokerage feed.
+
+
 `GET /api/live-history?symbol=AAPL&timeframe=1m` returns the same aggregated records sent by `/api/live` over WebSocket, with symbol, timeframe, source, upstream status, last source time, and observation ID. Supported intervals are `1m`, `5m`, `15m`, `1h`, and `1d`. The worker updates an upstream heartbeat; a stopped worker or stale heartbeat is reported as disconnected even if the browser remains connected. Source age assumes the Yahoo source time is epoch milliseconds; field meanings and snapshot-derived volumes remain unverified. Unknown volume is displayed as unknown, and a forming candle is not final. The worker's close detection relies on a private yfinance socket interface and should be rechecked on yfinance upgrades.
 
 To inspect stored observations while the smoke test is running, use a separate terminal:
@@ -100,13 +134,15 @@ To inspect stored observations while the smoke test is running, use a separate t
 python3 -c 'import sqlite3; db=sqlite3.connect("backend/data/observations.sqlite3"); print(db.execute("SELECT id,source_time,message_json FROM observations ORDER BY id DESC LIMIT 5").fetchall())'
 ```
 
-## Replay a recorded range
+## Saved chart snapshots and replay
 
-Start FastAPI and the frontend as above; the Yahoo worker is not needed. In the dashboard choose **Mode: Replay**, select a saved symbol, and enter UTC **receipt-time** bounds (inclusive start, exclusive end). The initial bounds cover the saved receipts for that symbol. Select **Start replay**, then **Play** or **Next observation**; **Pause** stops playback. The displayed source time and receipt time belong to the current observation. Playback advances approximately every 200 ms rather than reproducing real-time delays.
+Choose **Snapshot** in the dashboard to immediately see the latest saved AAPL candlestick chart. The timeframe buttons redraw the snapshot using that interval. **Change time range** opens UTC start and end fields; edit them and select **Load snapshot** to view another period. The end is the as-of cutoff, and the first minute intersecting the start is included. No future observations or later historical revisions are used. The chart shows the most recent portion initially; scroll or zoom to inspect earlier candles. A snapshot is read-only and cannot place or fill paper orders. If the chosen range has no recorded candles, the dashboard says so.
 
-Replay opens the recorded SQLite database read-only, takes a maximum receipt ID at the start, and rebuilds candles in a temporary in-memory database in receipt-ID order. Source timestamps remain unchanged, so late observations update their source minute only when their receipt is reached. Exact repeats retain their arrival positions without being counted twice. Distinct same-time messages remain distinct because this feed has no verified correction identity. The selected range alone supplies volume baselines; if it omits the prior observation, volume can be unknown. All symbols currently use the XNAS regular-session calendar; confirm the correct exchange before replaying another symbol. A selection is limited to 5,000 receipts and an empty range reports that no observations were recorded.
+Snapshot combines recorded streaming observations and Yahoo historical bars that were actually received by the cutoff. Their per-candle source, completion and coverage are shown. It is a reconstruction from data the app saved, not a guarantee of a complete exchange feed. Indicator settings are the current dashboard configuration, not historical settings. Existing account-aware decision snapshots are available only in step-by-step replay; the image-only **Chart signal** can analyze the visible saved chart.
 
-For a repeatable interactive check, with other local services stopped, run `sh scripts/smoke-replay.sh`. It starts FastAPI and Vite without starting Yahoo, opens a browser, asks for a twice-run comparison against SQLite, and checks that observation and receipt counts are unchanged. Its end-to-end run is still unverified; the equivalent browser steps were performed manually (see `docs/verification.md`).
+For the original receipt-by-receipt mode, choose **Step through observations**. Select **Start replay**, then **Play** or **Next observation**; **Pause** stops playback. This mode uses recorded observations only, follows receipt-ID order in a temporary in-memory database, and preserves source timestamps. It retains the original simulated-account behavior, including processing eligible pending replay orders as receipts advance. A range is limited to 5,000 receipts; empty selections report no observations. Choose **Back to snapshot** to return to the read-only view.
+
+Run `sh scripts/smoke-chart-snapshot.sh` for a repeatable browser check using a disposable synthetic database, or `python3 -m unittest tests.test_chart_snapshot -v` for cutoff, revision and paper-account checks. `sh scripts/smoke-replay.sh` is the earlier interactive replay check; its end-to-end run remains unverified.
 
 ## Simple moving averages
 
@@ -205,3 +241,56 @@ GPT-Live requires a supported browser with microphone permission, localhost or H
 ## Offline workstation smoke test
 
 Run `sh scripts/smoke-workstation.sh` from the project root. It uses installed Chrome and Playwright, starts isolated local services on ports 18761 and 18762, and creates a temporary synthetic account. Yahoo and both model calls are replaced with local doubles. The current implementation has not passed end to end: replay startup can race option loading, and the final isolated run timed out before the first observation. See `docs/verification.md` for the actual observed results and remaining checks. The same command is configured in `.github/workflows/workstation-smoke.yml` on pushes; it has not been run in GitHub Actions yet. Live Yahoo, image-model and voice checks remain separate.
+
+## Image-only chart signal exercise
+
+In **Chart signal**, choose a timeframe and make the desired candles visible, then select **Analyze visible chart**. The application sends a PNG of the visible chart and limited symbol, interval, capture/source times, completion timing, source label and staleness metadata to OpenAI. It does not send a separate OHLCV array, paper position or account values in this request. The picture itself can contain visible prices, volume and indicator lines. The dashboard previews the captured image and preserves recent choices with their images in the local SQLite database. Captures and responses may contain market data; the local database is ignored by Git. Only AAPL is currently supported by the live worker and this exercise.
+
+The model receives a named `chart_signal` question with **long**, **short** and **wait** choices. It is instructed to inspect the last two completed visible candles, exclude forming candles, and choose wait for stale, ambiguous or insufficient evidence. For live data, stale means the source observation is missing, more than 120 seconds old, materially future-dated, or the upstream feed is disconnected. In replay, staleness compares source time with the replayed receipt time, not the present wall clock. The displayed probability is matched to the returned choice by value; unavailable is not replaced with a guess, and the provider's separate confidence is not substituted. A probability describes the model's choice among the supplied options, not a probability of profit. No chart-signal request places a paper order. The existing **Ask about chart** control remains a separate position-aware workflow that sends additional account and candle context and must not be confused with this image-only exercise.
+
+### Read-only chart agent
+
+**Analyze visible chart** sends one question and its frozen browser capture to `POST /api/chart-agent`. The backend uses the Agents SDK to select a tool. A chart assessment uses a second OpenAI call through the existing Decisions client. Configure `OPENAI_API_KEY` in the backend environment or the ignored project `.env`. Both calls can incur API usage.
+
+| Registered tool | Model arguments | Result |
+| --- | --- | --- |
+| `lookup_workstation_rules` | `rule_set` must be `chart_signal` or `paper_strategy` | The chart question and its choices, or the paper strategy text and decision age limit. |
+| `assess_visible_chart` | Empty object | The existing classroom decision result, including its status, answer, capture context, PNG hash and saved image link. A missing or invalid capture returns an error. |
+
+For a rules question, send just the question. This command uses the configured provider:
+
+```sh
+curl --json '{"question":"Explain the long, short, and wait rules for the chart signal exercise."}' http://127.0.0.1:5173/api/chart-agent
+```
+
+For an assessment, the browser includes `snapshot.image_url` (a PNG data URL) and `snapshot.context` (the same timing and symbol fields as the existing classroom endpoint). Each item in the response's `tools` list has the SDK tool name and its returned `result`. An agent-level failure has a status, an error detail and an empty list. A completed tool call can itself report a Decisions provider error. Only the existing interpretation history is written. Paper cash, positions, orders and fills are outside the agent's tools.
+
+### Chart chat
+
+Open **Chart chat** from the workstation header. Type a question or use **Explain rules** or **Assess this chart**. Send captures the visible chart and its timing. The assistant can look up the rules even when the chart is empty. For “Should I wait?” it asks whether to explain the rules or assess the chart. Expand **Tool calls** under a reply to inspect each tool's name, arguments and returned result.
+
+An assessment reports the ticker, interval, candle time, choice and returned probability. **Chart signal** displays the same decision and saved image when they still match the view. If the chart changes while a reply is pending, that reply and its capture stay accessible in the chat. The existing chart arrows show SMA crossovers. Chat has no trading tools. Messages stay in the current tab, and the latest six exchanges provide follow-up context. Saved chart decisions remain in the existing SQLite history after refresh.
+
+For a comparison, assess a chart, display a later snapshot and ask for a new decision in the same chat. The reply shows the current and most recent successful earlier assessment for that ticker and mode (Live or Snapshot), including each interval, UTC chart time, choice and returned probability. A first assessment says there is no earlier match. **New chat** clears the transcript and starts a separate comparison history. Saved chart interpretations remain available under **Chart signal**. [Browser checks and screenshots](docs/verification.md#25--compare-chart-assessments)
+
+Run `python3 -m unittest tests.test_chart_agent tests.test_classroom_decisions -v` for tool and input checks. Run `sh scripts/smoke-classroom.sh` for the Chrome test with a disposable SQLite account and controlled providers. [Tool verification](docs/verification.md#23--read-only-chart-agent) · [Chat verification](docs/verification.md#24--workstation-chart-chat)
+
+### Read-only watchlist exercise
+
+The **Watchlist review** panel runs two coordinated Agents SDK agents on a labeled, deterministic five-ticker synthetic replay. It selects ready rows whose second close rises strictly more than the chosen dollar threshold, ranks by rise then ticker, and assesses up to three frozen captures with the chart signal rules. The defaults are a five-second interval, three cycles and a 20-call session limit; agent model requests and Decision API calls count toward the limit. Run once performs one cycle, Start advances through the three synthetic cutoffs, and Stop prevents further work while labeling in-flight results late. The watchlist log and results are held in backend memory until restart. This exercise never places an order.
+
+Start the normal backend and frontend as described above, then scroll to Watchlist review. Set the threshold to 0 to inspect the AAPL example, or 0.50 for an empty scan. Actual model outputs and probabilities may vary. To run the repeatable offline browser check: `sh scripts/smoke-watchlist.sh`. The activity does not yet load a recorded multi-ticker watchlist; the charts are synthetic test data.
+
+### SMA backtest (Part 4.2)
+
+Use **SMA backtest** to evaluate the existing long-only crossover rule against recorded AAPL stream receipts. The default UTC range covers the latest 200 saved receipts; edit it to choose a different range, up to 500 receipts. Configure short and long SMA windows, initial cash and entry shares. The simulator begins flat and buys on an upward confirmed crossover, closes the entire position on a downward crossover, and otherwise waits or holds. The result shows completed-bar decisions, simulated orders and fills, cash, shares, realized and unrealized profit/loss, and final equity. It runs in memory and does not change the paper account or its ledger.
+
+The engine walks receipts in arrival order under a frozen maximum receipt ID, rebuilds the chart with only the receipts available at each step, and ignores forming or incompletely covered candles. It does not reissue a decision when a later revision changes a previously assessed candle. A signal produces a pending order; the next non-stale quote with both source and receipt time after the decision fills it. An order remaining at the end is unfilled; insufficient cash is rejected at the fill price. A signal first observed over a minute after its bar closed is skipped. No fees, spread, slippage or market impact are modeled. Quotes outside regular hours can be fills; candles used for signals follow the existing XNAS regular-session handling. Final open positions are marked at the latest eligible saved quote. Downloaded Yahoo historical bars are excluded because their retrieval time does not establish their availability at a historical decision time.
+
+A short single-symbol sample, missing observations, selection/survivorship bias and parameter tuning limit what the results establish. The 500-receipt cap bounds a deliberately straightforward replay implementation. Historical performance cannot establish future returns. `sh scripts/smoke-backtest.sh` runs the offline browser test on a temporary recorded fixture; `python3 -m unittest tests.test_backtest tests.test_sma tests.test_pnl tests.test_paper tests.test_strategy` checks known accounting, timing, and indicator examples. The existing GitHub Actions workflow runs the full Python suite, this browser test, and the workstation smoke on pushes.
+
+### A quieter workspace
+
+The chart, data age, and paper-account balance remain visible. Expand the named rows to access SMA settings, candle selection, additional indicators, backtesting, watchlist review, chart analysis, chat, trading history, automation, and voice. Running automation is surfaced in its section so its Stop control is accessible. The header's **Chart chat** link opens the chat section.
+
+Use **Hide SMAs / Show SMAs** above the chart to hide or show the two crossover SMA lines. The button changes only their display; SMA calculations, crossover signals, and strategy rules continue to use the same values. Additional separately configured indicators are unaffected. The visible-chart image sent to Chart signal or Chart chat reflects the chosen visibility; the separate account-aware frozen chart still renders its strategy indicators. This display choice resets when the page reloads. `sh scripts/smoke-live-chart.sh` checks the visible chart before and after the toggle with isolated synthetic data.
